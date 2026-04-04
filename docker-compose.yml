@@ -120,10 +120,10 @@ services:
   astro-api:
     <<: *astro-common
     container_name: astro-api
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - "source /opt/venv/bin/activate && exec uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1 --loop uvloop"
+    command: ["/opt/venv/bin/python", "-m", "alembic", "upgrade", "head"]
     environment:
+      - PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+      - VIRTUAL_ENV=/opt/venv
       - APP_NAME=Astro-Stack
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
