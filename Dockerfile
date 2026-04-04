@@ -124,7 +124,10 @@ RUN useradd -m -s /bin/bash astro \
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH"
-ENV PYTHONPATH="/app"
+# Note: PYTHONPATH must NOT be set to /app here — it would shadow the installed
+# alembic package with /app/alembic/ (our migrations dir) causing ImportError.
+# The editable install (pip install -e .) creates a .pth file in site-packages
+# that appends /app to sys.path AFTER site-packages, avoiding the conflict.
 
 WORKDIR /app
 
