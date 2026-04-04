@@ -127,8 +127,9 @@ WORKDIR /app
 COPY --chown=astro:astro app/ ./app/
 COPY --chown=astro:astro pyproject.toml .
 
-# Install application in development mode (upgrade setuptools first)
-RUN /opt/venv/bin/pip install --upgrade setuptools wheel && /opt/venv/bin/pip install -e .
+# Install application in development mode
+# Note: Do NOT upgrade setuptools as torch requires setuptools<82
+RUN /opt/venv/bin/pip install -e .
 
 # Create Alembic directory
 RUN mkdir -p alembic/versions
