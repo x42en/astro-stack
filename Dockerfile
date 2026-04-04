@@ -65,21 +65,25 @@ RUN mkdir -p /opt/astap \
     && chmod +x /opt/astap/astap \
     && ln -s /opt/astap/astap /usr/local/bin/astap
 
-# ── Stage 4: Python dependencies ──────────────────────────────────────────
+# ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps
 
 WORKDIR /build
 
-# Install PyTorch with CUDA support first (large download, cached separately)
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip3 install --no-cache-dir \
+# Create virtual environment
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch with CUDA support (large download, cached separately)
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu126
 
 # Copy and install application dependencies
 COPY pyproject.toml .
-RUN pip3 install --no-cache-dir -e ".[prod]" || \
-    pip3 install --no-cache-dir \
+RUN pip install -e ".[prod]" || \
+    pip install \
         fastapi uvicorn[standard] websockets \
         sqlmodel asyncpg alembic greenlet \
         arq redis[hiredis] \
@@ -94,14 +98,14 @@ FROM python-deps AS ai-tools
 # Cosmic Clarity — MIT licence Python scripts from setiastro
 RUN git clone --depth=1 https://github.com/setiastro/cosmicclarity.git \
         /opt/cosmic-clarity \
-    && pip3 install --no-cache-dir -r /opt/cosmic-clarity/requirements.txt \
+    && pip install -r /opt/cosmic-clarity/requirements.txt \
     || echo "WARNING: Cosmic Clarity clone failed — mount sources manually"
 
 # GraXpert — GPLv3 gradient removal
-RUN pip3 install --no-cache-dir graxpert \
+RUN pip install graxpert \
     || git clone --depth=1 https://github.com/Steffenhir/GraXpert.git \
         /opt/graxpert \
-    && pip3 install --no-cache-dir -r /opt/graxpert/requirements.txt \
+    && pip install -r /opt/graxpert/requirements.txt \
     || echo "WARNING: GraXpert install failed — mount sources manually"
 
 # ── Stage 6: Final application image ──────────────────────────────────────
@@ -112,6 +116,10 @@ RUN useradd -m -s /bin/bash -u 1000 astro \
     && mkdir -p /inbox /sessions /output /models \
     && chown -R astro:astro /inbox /sessions /output /models
 
+# Copy venv and set PATH
+COPY --from=ai-tools /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 
 # Copy application source
@@ -119,7 +127,7 @@ COPY --chown=astro:astro app/ ./app/
 COPY --chown=astro:astro pyproject.toml .
 
 # Install application in development mode
-RUN pip3 install --no-cache-dir -e .
+RUN pip install -e .
 
 # Create Alembic directory
 RUN mkdir -p alembic/versions
