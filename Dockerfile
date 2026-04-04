@@ -112,7 +112,7 @@ RUN pip install graxpert \
 FROM ai-tools AS final
 
 # Create non-root user for the application
-RUN useradd -m -s /bin/bash -u 1000 astro \
+RUN useradd -m -s /bin/bash astro \
     && mkdir -p /inbox /sessions /output /models \
     && chown -R astro:astro /inbox /sessions /output /models
 
