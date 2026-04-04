@@ -1,8 +1,8 @@
 ---
 # =============================================================================
 # Astro-Stack — Docker Compose
-# Services: astro-api, astro-worker-gpu0, astro-worker-gpu1, redis
-# Integrates with: postgres (external), ollama (external)
+# Services: astro-api, astro-worker-gpu0, astro-worker-gpu1, redis, postgres, traefik
+# Supports standalone deployment (no external dependencies required)
 # =============================================================================
 
 x-astro-common: &astro-common
@@ -16,7 +16,7 @@ x-astro-common: &astro-common
     # Auth (disabled by default; set AUTH_ENABLED=true to activate)
     - AUTH_ENABLED=${AUTH_ENABLED:-false}
     - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
-    # Database — connect to your existing PostgreSQL instance
+    # Database — uses embedded postgres container
     - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
     # Redis
     - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
@@ -43,6 +43,8 @@ x-astro-common: &astro-common
     # AI model weights — populated once via init-models.sh
     - ${MODELS_HOST_PATH:-./data/models}:/models
   depends_on:
+    postgres:
+      condition: service_healthy
     redis:
       condition: service_healthy
   restart: unless-stopped
@@ -50,7 +52,65 @@ x-astro-common: &astro-common
     - astro-net
 
 services:
-  # ── API Server ──────────────────────────────────────────────────────────────
+  # ── Traefik Reverse Proxy ────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3
+    container_name: astro-traefik
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_ACME_EMAIL:-admin@example.com}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --log.level=${LOG_LEVEL:-info}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${TRAEFIK_DASHBOARD_PORT:-8081}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certs:/letsencrypt
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+    environment:
+      - TZ=UTC
+    restart: unless-stopped
+    networks:
+      - astro-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${TRAEFIK_DASHBOARD_HOST:-traefik.localhost}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+
+  # ── PostgreSQL Database ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: astro-postgres
+    environment:
+      - POSTGRES_USER=astro
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-astro}
+      - POSTGRES_DB=astrostack
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U astro -d astrostack"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - astro-net
+
+  # ── API Server ────────────────────────────────────────────────────────────────
   astro-api:
     <<: *astro-common
     container_name: astro-api
@@ -83,8 +143,16 @@ services:
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
-    ports:
-      - "${API_PORT:-8080}:8080"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.astro-api.rule=Host(`${TRAEFIK_HOST:-astro.localhost}`)"
+      - "traefik.http.routers.astro-api.entrypoints=web"
+      - "traefik.http.routers.astro-api.service=astro-api-service"
+      - "traefik.http.services.astro-api-service.loadbalancer.server.port=8080"
+      - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-astro.localhost}`)"
+      - "traefik.http.routers.astro-api-secure.entrypoints=websecure"
+      - "traefik.http.routers.astro-api-secure.tls.certResolver=letsencrypt"
+      - "traefik.http.routers.astro-api-secure.service=astro-api-service"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -92,7 +160,7 @@ services:
       retries: 5
       start_period: 60s
 
-  # ── Worker — GPU 0 ──────────────────────────────────────────────────────────
+  # ── Worker — GPU 0 ───────────────────────────────────────────────────────────
   astro-worker-gpu0:
     <<: *astro-common
     container_name: astro-worker-gpu0
@@ -130,7 +198,7 @@ services:
               device_ids: ["0"]
               capabilities: [gpu, compute, utility]
 
-  # ── Worker — GPU 1 ──────────────────────────────────────────────────────────
+  # ── Worker — GPU 1 ───────────────────────────────────────────────────────────
   astro-worker-gpu1:
     <<: *astro-common
     container_name: astro-worker-gpu1
@@ -168,7 +236,7 @@ services:
               device_ids: ["1"]
               capabilities: [gpu, compute, utility]
 
-  # ── Redis ───────────────────────────────────────────────────────────────────
+  # ── Redis ──────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: astro-redis
@@ -196,7 +264,9 @@ services:
       - init   # Only runs with: docker compose --profile init up
 
 volumes:
+  postgres_data:
   redis_data:
+  traefik_certs:
 
 networks:
   astro-net:
