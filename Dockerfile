@@ -18,11 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Build tools
     build-essential cmake pkg-config git wget curl \
     # LibRaw (for DSLR RAW conversion)
-    libraw-dev libraw22 \
+    libraw-dev \
     # Siril dependencies
     libgtk-3-dev libglib2.0-dev libfftw3-dev \
     libcfitsio-dev libgsl-dev libopencv-dev \
-    libwcs-dev libjpeg-dev libpng-dev libtiff-dev \
+    libwcslib-dev libjpeg-dev libpng-dev libtiff-dev \
     libheif-dev libexiv2-dev \
     # Misc
     ca-certificates xvfb libgomp1 \
