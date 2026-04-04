@@ -46,7 +46,7 @@ class JobRepository(BaseRepository[PipelineJob]):
             .offset(offset)
             .limit(limit)
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def get_active_job_for_session(
@@ -65,7 +65,7 @@ class JobRepository(BaseRepository[PipelineJob]):
             PipelineJob.session_id == session_id,
             PipelineJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),  # type: ignore[attr-defined]
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return result.first()
 
     async def update_status(
@@ -111,7 +111,7 @@ class JobStepRepository(BaseRepository[JobStep]):
         stmt = (
             select(JobStep).where(JobStep.job_id == job_id).order_by(JobStep.step_index)  # type: ignore[attr-defined]
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def get_by_job_and_name(
@@ -132,7 +132,7 @@ class JobStepRepository(BaseRepository[JobStep]):
             JobStep.job_id == job_id,
             JobStep.step_name == step_name,
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return result.first()
 
     async def upsert_step(self, step: JobStep) -> JobStep:

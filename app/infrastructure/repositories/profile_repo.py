@@ -62,7 +62,7 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
                 .offset(offset)
                 .limit(limit)
             )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def get_by_name_for_user(
@@ -85,5 +85,5 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
             ProcessingProfile.name == name,
             ProcessingProfile.owner_user_id == owner_user_id,
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return result.first()

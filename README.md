@@ -30,10 +30,46 @@ docker compose run --rm astro-api alembic upgrade head
 # 5. Start all services
 docker compose up -d
 
-# API available at:   http://localhost:8080
+# API available at:   http://localhost:8080 (direct) or http://localhost (via Traefik)
 # OpenAPI docs:       http://localhost:8080/docs
 # Health check:       http://localhost:8080/health
+# Traefik dashboard:  http://localhost:8081 (if enabled)
 ```
+
+## Reverse Proxy (Traefik)
+
+A Traefik reverse proxy is included in the Docker stack to handle:
+
+- **TLS termination** with automatic Let's Encrypt certificate provisioning
+- **HTTP → HTTPS redirect** (enabled by default)
+- **Security headers**: HSTS, X-Frame-Options, X-Content-Type-Options
+- **Gzip compression** for API responses
+- **Docker service discovery** via labels
+
+### Configuration
+
+The Traefik configuration is in:
+- `traefik/traefik.yml` — main configuration (entrypoints, TLS, Let's Encrypt)
+- `traefik/dynamic/middleware.yml` — security headers and compression
+
+### Exposed endpoints
+
+| Service          | Internal Port | External URL                    |
+| ---------------- | ------------- | ------------------------------  |
+| astro-api        | 8080          | `http://localhost/` (Traefik)  |
+| Traefik dashboard| 8080          | `http://localhost:8081/`      |
+
+### Using with a custom domain
+
+Set the `TRAEFIK_HOST` environment variable:
+
+```bash
+export TRAEFIK_HOST=astro.mydomain.com
+export TRAEFIK_ACME_EMAIL=admin@mydomain.com
+docker compose up -d
+```
+
+Traefik will automatically provision a Let's Encrypt certificate for your domain.
 
 ## Usage
 
@@ -139,6 +175,13 @@ curl -X POST http://localhost:8080/api/v1/profiles \
 
 ```
 ┌──────────────────────────────────────────────────────┐
+│  Traefik Reverse Proxy (ports 80/443)                 │
+│    - Let's Encrypt TLS auto-configuration             │
+│    - Security headers (HSTS, X-Frame-Options)         │
+│    - Gzip compression                                 │
+└────────────────────────┬─────────────────────────────┘
+                         │
+┌────────────────────────▼─────────────────────────────┐
 │  astro-api (FastAPI + Uvicorn + Watchdog)             │
 │    - REST API  /api/v1/                               │
 │    - WebSocket /ws/jobs/{id}, /ws/sessions/{id}       │

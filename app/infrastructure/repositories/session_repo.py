@@ -34,7 +34,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             The matching session, or ``None`` if not found.
         """
         stmt = select(AstroSession).where(AstroSession.inbox_path == inbox_path)
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return result.first()
 
     async def list_by_status(
@@ -60,7 +60,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             .offset(offset)
             .limit(limit)
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def list_all_ordered(
@@ -83,7 +83,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             .offset(offset)
             .limit(limit)
         )
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def update_status(

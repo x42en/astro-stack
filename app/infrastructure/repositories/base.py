@@ -68,7 +68,7 @@ class BaseRepository(ABC, Generic[ModelT]):
             List of model instances ordered by insertion order.
         """
         stmt = select(self.model).offset(offset).limit(limit)
-        result = await self.session.exec(stmt)  # type: ignore[call-overload]
+        result = await self.session.execute(stmt)
         return list(result.all())
 
     async def create(self, instance: ModelT) -> ModelT:

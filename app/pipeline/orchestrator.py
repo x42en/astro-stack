@@ -448,7 +448,7 @@ class PipelineOrchestrator:
         from sqlmodel import select  # noqa: PLC0415
         from app.domain.session import AstroSession  # noqa: PLC0415
 
-        result = await self.db_session.exec(  # type: ignore[call-overload]
+        result = await self.db_session.execute(
             select(AstroSession).where(AstroSession.id == self.session_id)
         )
         session_record = result.first()

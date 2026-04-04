@@ -5,7 +5,7 @@ The engine is created once at application startup via the lifespan context.
 
 Example:
     >>> async with get_async_session() as session:
-    ...     result = await session.exec(select(Session))
+    ...     result = await session.execute(select(Session))
 """
 
 from __future__ import annotations
