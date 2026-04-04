@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
@@ -24,6 +25,30 @@ class GradientRemovalStep(PipelineStep):
             adapter: Optional GraXpert adapter; created from settings if not provided.
         """
         self._adapter = adapter or GraXpertAdapter()
+
+    def _is_ai_model_available(self, ai_model: str) -> bool:
+        """Check if the GraXpert AI model is available.
+
+        Args:
+            ai_model: Name of the AI model (e.g., "GraXpert-AI-1.0.0").
+
+        Returns:
+            True if model files exist, False otherwise.
+        """
+        # GraXpert stores models in user's data dir or models_path/graxpert
+        # Check both locations for the ONNX model
+        models_dir = self._adapter.models_path
+        if not models_dir.exists():
+            return False
+
+        # GraXpert 3.x uses versioned directories with model.onnx
+        for version_dir in models_dir.iterdir():
+            if version_dir.is_dir():
+                onnx_model = version_dir / "model.onnx"
+                if onnx_model.exists():
+                    return True
+
+        return False
 
     async def execute(
         self,
@@ -53,18 +78,32 @@ class GradientRemovalStep(PipelineStep):
 
         self._adapter.gpu_device = context.gpu_device
 
+        # Determine method: use AI if model is available, else fallback to polynomial
+        requested_method = config.get("gradient_removal_method", "ai")
+        ai_model = config.get("gradient_removal_ai_model", "GraXpert-AI-1.0.0")
+
+        method = requested_method
+        if requested_method == "ai" and not self._is_ai_model_available(ai_model):
+            logger.warning(
+                "graxpert_ai_model_not_found",
+                model=ai_model,
+                models_dir=str(self._adapter.models_path),
+                message="AI model not found, falling back to polynomial method",
+            )
+            method = "polynomial"
+
         await self._adapter.remove_background(
             input_path=context.stacked_fits_path,
             output_path=output_path,
-            method=str(config.get("gradient_removal_method", "ai")),
-            ai_model=str(config.get("gradient_removal_ai_model", "GraXpert-AI-1.0.0")),
+            method=method,
+            ai_model=ai_model,
         )
 
         context.background_removed_path = output_path
-        logger.info("gradient_removal_done", output=str(output_path))
+        logger.info("gradient_removal_done", output=str(output_path), method=method)
 
         return StepResult(
             success=True,
-            metadata={"background_removed_path": str(output_path)},
-            message="Background gradient removed.",
+            metadata={"background_removed_path": str(output_path), "method": method},
+            message=f"Background gradient removed using {method} method.",
         )

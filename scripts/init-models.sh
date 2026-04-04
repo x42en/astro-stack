@@ -88,20 +88,13 @@ GRAXPERT_MODEL="GraXpert-AI-1.0.0.pth"
 GRAXPERT_MODEL_PATH="${GRAXPERT_DIR}/${GRAXPERT_MODEL}"
 
 if [ ! -f "${GRAXPERT_MODEL_PATH}" ]; then
-    echo "  Downloading GraXpert AI model..."
-    # GraXpert downloads its own models via its built-in mechanism
-    # Try to trigger the download via Python
-    python3 -c "
-import sys
-sys.path.insert(0, '/opt/graxpert')
-try:
-    from graxpert.ai_model_handling import download_model
-    download_model('GraXpert-AI-1.0.0', models_dir='${GRAXPERT_DIR}')
-    print('  GraXpert model downloaded successfully.')
-except Exception as e:
-    print(f'  WARNING: GraXpert model download failed: {e}')
-    print('  You may need to run GraXpert once to trigger automatic download.')
-" 2>&1 || echo "  WARNING: GraXpert model auto-download unavailable"
+    echo "  GraXpert AI model is optional for gradient removal."
+    echo "  The model will be downloaded automatically on first use via the GUI."
+    echo "  For headless usage, you can manually download from:"
+    echo "    https://github.com/Steffenhir/GraXpert/releases"
+    # Note: GraXpert's download_model() is only available in GUI mode
+    # The model is loaded lazily when first needed
+    echo "  Skipping automatic download (requires GUI)."
 else
     echo "  Already present: ${GRAXPERT_MODEL}"
 fi
@@ -113,12 +106,15 @@ ASTAP_DB_DIR="${ASTAP_STAR_DB_PATH:-/opt/astap/stars}"
 mkdir -p "${ASTAP_DB_DIR}"
 
 # D50 catalogue (~500MB) — covers most deep sky objects
+# Download from SourceForge (new location, hnsky.org is deprecated)
 ASTAP_DB_FILE="${ASTAP_DB_DIR}/d50.1476"
 if [ ! -f "${ASTAP_DB_FILE}" ]; then
     echo "  Downloading ASTAP D50 star catalogue (~500MB)..."
-    wget -q "https://www.hnsky.org/d50.zip" -O /tmp/d50.zip \
-        && unzip -q /tmp/d50.zip -d "${ASTAP_DB_DIR}" \
-        && rm /tmp/d50.zip \
+    wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download" -O /tmp/d50.deb \
+        && dpkg -x /tmp/d50.deb /tmp/d50_extract \
+        && mv /tmp/d50_extract/usr/share/astap/star_database/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+        || mv /tmp/d50_extract/usr/share/astap/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+        && rm -rf /tmp/d50.deb /tmp/d50_extract \
         && echo "  ASTAP D50 catalogue installed." \
         || echo "  WARNING: ASTAP D50 download failed — plate solving will not work."
 else
