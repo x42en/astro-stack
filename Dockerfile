@@ -58,8 +58,10 @@ RUN command -v siril-cli || \
 FROM siril-build AS astap-install
 
 RUN mkdir -p /opt/astap \
-    && wget -q "https://www.hnsky.org/astap_linux_x86_64" \
-        -O /opt/astap/astap \
+    && wget -q "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
+        -O /opt/astap/astap.tar.gz \
+    && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap --strip-components=1 \
+    && rm /opt/astap/astap.tar.gz \
     && chmod +x /opt/astap/astap \
     && ln -s /opt/astap/astap /usr/local/bin/astap
 
