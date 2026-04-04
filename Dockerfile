@@ -137,7 +137,9 @@ COPY --chown=astro:astro pyproject.toml .
 # Note: Do NOT upgrade setuptools as torch requires setuptools<82
 RUN /opt/venv/bin/pip install -e .
 
-# Create Alembic directory
+# Copy alembic configuration to app directory (WORKDIR is /app)
+COPY --chown=astro:astro alembic.ini ./alembic.ini
+COPY --chown=astro:astro alembic/ ./alembic/
 RUN mkdir -p alembic/versions
 
 # Copy init-models script

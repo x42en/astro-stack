@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -18,6 +19,12 @@ from app.core.config import get_settings
 
 # Alembic Config object
 config = context.config
+
+# Override sqlalchemy.url from environment if not set in alembic.ini
+# This allows using DATABASE_URL env var directly
+if not config.get_main_option("sqlalchemy.url"):
+    settings = get_settings()
+    config.set_main_option("sqlalchemy.url", settings.database_url_str)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
