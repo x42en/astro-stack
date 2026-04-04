@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Siril dependencies
     libgtk-3-dev libglib2.0-dev libfftw3-dev \
     libcfitsio-dev libgsl-dev libopencv-dev \
-    libwcslib-dev libjpeg-dev libpng-dev libtiff-dev \
+    wcslib-dev libjpeg-dev libpng-dev libtiff-dev \
     libheif-dev libexiv2-dev \
     # Misc
     ca-certificates xvfb libgomp1 \
