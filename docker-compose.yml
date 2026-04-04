@@ -9,10 +9,14 @@ x-astro-common: &astro-common
   build:
     context: .
     dockerfile: Dockerfile
+  runtime: nvidia
   environment:
     # Application
     - APP_NAME=Astro-Stack
     - LOG_LEVEL=${LOG_LEVEL:-info}
+    # GPU
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     # Auth (disabled by default; set AUTH_ENABLED=true to activate)
     - AUTH_ENABLED=${AUTH_ENABLED:-false}
     - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
@@ -116,17 +120,9 @@ services:
   astro-api:
     <<: *astro-common
     container_name: astro-api
+    entrypoint: ["/bin/bash", "-c"]
     command:
-      - uvicorn
-      - app.main:app
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8080"
-      - --workers
-      - "1"
-      - --loop
-      - uvloop
+      - "source /opt/venv/bin/activate && exec uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 1 --loop uvloop"
     environment:
       - APP_NAME=Astro-Stack
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -274,3 +270,10 @@ volumes:
 networks:
   astro-net:
     driver: bridge
+
+# Enable NVIDIA GPU support for all services
+x-gpu-common: &gpu-common
+  runtime: nvidia
+  environment:
+    - NVIDIA_VISIBLE_DEVICES=all
+    - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
