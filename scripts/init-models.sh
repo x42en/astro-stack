@@ -106,16 +106,13 @@ mkdir -p "${ASTAP_DB_DIR}"
 ASTAP_DB_FILE="${ASTAP_DB_DIR}/d50.1476"
 if [ ! -f "${ASTAP_DB_FILE}" ]; then
     echo "  Downloading ASTAP D50 star catalogue (~500MB)..."
-    # Try the newest zstd-compressed package first
-    wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg.tar.zst/download" -O /tmp/d50.tar.zst \
-        && tar -I zstd -xf /tmp/d50.tar.zst -C /tmp \
-        && mv /tmp/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-        && rm -rf /tmp/d50.tar.zst \
-        && echo "  ASTAP D50 catalogue installed." \
-    || {
-        # Fallback to older .deb format
+    # Try the newest zstd-compressed package first (direct URL without /download)
+    ASTAP_URL="https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg.tar.zst/download"
+    wget -L "${ASTAP_URL}" -O /tmp/d50.tar.zst 2>&1 || {
+        # Fallback to .deb format
         echo "  Trying older .deb format..."
-        wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download" -O /tmp/d50.deb \
+        DEB_URL="https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download"
+        wget -L "${DEB_URL}" -O /tmp/d50.deb 2>&1 \
             && dpkg -x /tmp/d50.deb /tmp/d50_extract \
             && mv /tmp/d50_extract/usr/share/astap/star_database/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
             || mv /tmp/d50_extract/usr/share/astap/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
@@ -123,6 +120,14 @@ if [ ! -f "${ASTAP_DB_FILE}" ]; then
             && echo "  ASTAP D50 catalogue installed." \
         || echo "  WARNING: ASTAP D50 download failed — plate solving will not work."
     }
+    # Check if zst extraction worked
+    if [ -f "/tmp/d50.tar.zst" ]; then
+        tar -I zstd -xf /tmp/d50.tar.zst -C /tmp 2>&1 \
+            && mv /tmp/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+            && rm -rf /tmp/d50.tar.zst \
+            && echo "  ASTAP D50 catalogue installed." \
+        || echo "  WARNING: ASTAP D50 extraction failed — plate solving will not work."
+    fi
 else
     echo "  Already present: ASTAP D50 catalogue"
 fi
