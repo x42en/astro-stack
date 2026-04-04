@@ -120,7 +120,7 @@ services:
   astro-api:
     <<: *astro-common
     container_name: astro-api
-    command: ["/opt/venv/bin/python", "-m", "alembic", "upgrade", "head"]
+    command: ["/opt/venv/bin/alembic", "upgrade", "head"]
     environment:
       - PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
       - VIRTUAL_ENV=/opt/venv
