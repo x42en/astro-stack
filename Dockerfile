@@ -137,6 +137,9 @@ COPY --chown=astro:astro pyproject.toml .
 # Note: Do NOT upgrade setuptools as torch requires setuptools<82
 RUN /opt/venv/bin/pip install -e .
 
+# Ensure alembic is installed (may have been skipped in editable install)
+RUN /opt/venv/bin/pip install alembic --quiet
+
 # Copy alembic configuration to app directory (WORKDIR is /app)
 COPY --chown=astro:astro alembic.ini ./alembic.ini
 COPY --chown=astro:astro alembic/ ./alembic/
