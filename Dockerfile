@@ -119,6 +119,7 @@ RUN useradd -m -s /bin/bash astro \
 # Copy venv and set PATH
 COPY --from=ai-tools /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH="/app"
 
 WORKDIR /app
 
@@ -126,8 +127,8 @@ WORKDIR /app
 COPY --chown=astro:astro app/ ./app/
 COPY --chown=astro:astro pyproject.toml .
 
-# Install application in development mode
-RUN pip install -e .
+# Install application in development mode (upgrade setuptools first)
+RUN /opt/venv/bin/pip install --upgrade setuptools wheel && /opt/venv/bin/pip install -e .
 
 # Create Alembic directory
 RUN mkdir -p alembic/versions
