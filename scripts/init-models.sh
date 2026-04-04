@@ -84,20 +84,16 @@ fi
 echo ""
 echo "--- GraXpert AI model ---"
 
-GRAXPERT_MODEL="GraXpert-AI-1.0.0.pth"
-GRAXPERT_MODEL_PATH="${GRAXPERT_DIR}/${GRAXPERT_MODEL}"
+GRAXPERT_DIR="${MODELS_DIR}/graxpert"
+mkdir -p "${GRAXPERT_DIR}"
 
-if [ ! -f "${GRAXPERT_MODEL_PATH}" ]; then
-    echo "  GraXpert AI model is optional for gradient removal."
-    echo "  The model will be downloaded automatically on first use via the GUI."
-    echo "  For headless usage, you can manually download from:"
-    echo "    https://github.com/Steffenhir/GraXpert/releases"
-    # Note: GraXpert's download_model() is only available in GUI mode
-    # The model is loaded lazily when first needed
-    echo "  Skipping automatic download (requires GUI)."
-else
-    echo "  Already present: ${GRAXPERT_MODEL}"
-fi
+# GraXpert headless CLI automatically downloads AI models on first run
+# We just need to ensure graxpert is installed, models will be downloaded
+# when the pipeline runs (or we can trigger a dummy run to pre-download)
+
+echo "  GraXpert AI models are downloaded automatically on first use."
+echo "  Models will be downloaded from MinIO S3 when pipeline runs."
+echo "  To pre-download now, run: graxpert --help (from inside container)"
 
 # ── ASTAP star catalogue ──────────────────────────────────────────────────────
 echo ""
@@ -106,17 +102,27 @@ ASTAP_DB_DIR="${ASTAP_STAR_DB_PATH:-/opt/astap/stars}"
 mkdir -p "${ASTAP_DB_DIR}"
 
 # D50 catalogue (~500MB) — covers most deep sky objects
-# Download from SourceForge (new location, hnsky.org is deprecated)
+# Download from SourceForge (new .pkg.tar.zst format)
 ASTAP_DB_FILE="${ASTAP_DB_DIR}/d50.1476"
 if [ ! -f "${ASTAP_DB_FILE}" ]; then
     echo "  Downloading ASTAP D50 star catalogue (~500MB)..."
-    wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download" -O /tmp/d50.deb \
-        && dpkg -x /tmp/d50.deb /tmp/d50_extract \
-        && mv /tmp/d50_extract/usr/share/astap/star_database/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-        || mv /tmp/d50_extract/usr/share/astap/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-        && rm -rf /tmp/d50.deb /tmp/d50_extract \
+    # Try the newest zstd-compressed package first
+    wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg.tar.zst/download" -O /tmp/d50.tar.zst \
+        && tar -I zstd -xf /tmp/d50.tar.zst -C /tmp \
+        && mv /tmp/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+        && rm -rf /tmp/d50.tar.zst \
         && echo "  ASTAP D50 catalogue installed." \
+    || {
+        # Fallback to older .deb format
+        echo "  Trying older .deb format..."
+        wget -q "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download" -O /tmp/d50.deb \
+            && dpkg -x /tmp/d50.deb /tmp/d50_extract \
+            && mv /tmp/d50_extract/usr/share/astap/star_database/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+            || mv /tmp/d50_extract/usr/share/astap/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
+            && rm -rf /tmp/d50.deb /tmp/d50_extract \
+            && echo "  ASTAP D50 catalogue installed." \
         || echo "  WARNING: ASTAP D50 download failed — plate solving will not work."
+    }
 else
     echo "  Already present: ASTAP D50 catalogue"
 fi

@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wcslib-dev libjpeg-dev libpng-dev libtiff-dev \
     libheif-dev libexiv2-dev \
     # Misc
-    ca-certificates xvfb libgomp1 \
+    ca-certificates xvfb libgomp1 zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Create Python 3.12 as default
@@ -102,10 +102,16 @@ RUN git clone --depth=1 https://github.com/setiastro/cosmicclarity.git \
     || echo "WARNING: Cosmic Clarity clone failed — mount sources manually"
 
 # GraXpert — GPLv3 gradient removal
+# GraXpert uses MinIO S3 to download AI models
+# We need to fetch the s3_secrets.py file which contains credentials/endpoint
 RUN pip install graxpert \
-    || git clone --depth=1 https://github.com/Steffenhir/GraXpert.git \
-        /opt/graxpert \
-    && pip install -r /opt/graxpert/requirements.txt \
+    || ( \
+        git clone --depth=1 https://github.com/Steffenhir/GraXpert.git /opt/graxpert && \
+        pip install -r /opt/graxpert/requirements.txt && \
+        # Download s3_secrets.py which contains the MinIO endpoint for model downloads
+        curl -sL "https://raw.githubusercontent.com/Steffenhir/GraXpert/main/graxpert/s3_secrets.py" \
+            -o /opt/venv/lib/python3.12/site-packages/graxpert/s3_secrets.py \
+        ) \
     || echo "WARNING: GraXpert install failed — mount sources manually"
 
 # ── Stage 6: Final application image ──────────────────────────────────────

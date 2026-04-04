@@ -42,6 +42,8 @@ x-astro-common: &astro-common
     - ${OUTPUT_HOST_PATH:-./data/output}:/output
     # AI model weights — populated once via init-models.sh
     - ${MODELS_HOST_PATH:-./data/models}:/models
+    # ASTAP star database (populated via init-models.sh)
+    - astro_astap_stars:/opt/astap/stars
   depends_on:
     postgres:
       condition: service_healthy
@@ -267,6 +269,7 @@ volumes:
   postgres_data:
   redis_data:
   traefik_certs:
+  astro_astap_stars:
 
 networks:
   astro-net:
