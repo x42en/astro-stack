@@ -1,0 +1,22 @@
+# =============================================================================
+# Siril Script: preprocessing_lights_only.ssf
+# Template for sessions with lights only (no calibration frames)
+# Used as reference — actual scripts are generated dynamically by
+# app/pipeline/adapters/siril_script_builder.py
+# =============================================================================
+
+requires 1.2.0
+
+# Convert light frames to internal FITS format
+cd lights
+convert light -out=../process
+cd ../process
+
+# Register (align) frames using star pattern matching
+register light -noout
+
+# Stack with sigma clipping rejection
+stack r_light rej 3 3 -norm=addscale -out=stack_result
+
+cd ..
+close

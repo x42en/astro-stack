@@ -1,0 +1,203 @@
+---
+# =============================================================================
+# Astro-Stack — Docker Compose
+# Services: astro-api, astro-worker-gpu0, astro-worker-gpu1, redis
+# Integrates with: postgres (external), ollama (external)
+# =============================================================================
+
+x-astro-common: &astro-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment:
+    # Application
+    - APP_NAME=Astro-Stack
+    - LOG_LEVEL=${LOG_LEVEL:-info}
+    # Auth (disabled by default; set AUTH_ENABLED=true to activate)
+    - AUTH_ENABLED=${AUTH_ENABLED:-false}
+    - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
+    # Database — connect to your existing PostgreSQL instance
+    - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
+    # Redis
+    - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    # Ollama
+    - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+    - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    # Storage paths (mounted volumes)
+    - INBOX_PATH=/inbox
+    - SESSIONS_PATH=/sessions
+    - OUTPUT_PATH=/output
+    - MODELS_PATH=/models
+    # External tools
+    - SIRIL_BINARY=siril-cli
+    - ASTAP_BINARY=astap
+    - ASTAP_STAR_DB_PATH=/opt/astap/stars
+    # Pipeline
+    - PIPELINE_MAX_RETRIES=3
+    - SESSION_STABILITY_DELAY=30.0
+  volumes:
+    # Shared data directories — mount your actual storage paths here
+    - ${INBOX_HOST_PATH:-./data/inbox}:/inbox
+    - ${SESSIONS_HOST_PATH:-./data/sessions}:/sessions
+    - ${OUTPUT_HOST_PATH:-./data/output}:/output
+    # AI model weights — populated once via init-models.sh
+    - ${MODELS_HOST_PATH:-./data/models}:/models
+  depends_on:
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  networks:
+    - astro-net
+
+services:
+  # ── API Server ──────────────────────────────────────────────────────────────
+  astro-api:
+    <<: *astro-common
+    container_name: astro-api
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+      - --workers
+      - "1"
+      - --loop
+      - uvloop
+    environment:
+      - APP_NAME=Astro-Stack
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - INBOX_PATH=/inbox
+      - SESSIONS_PATH=/sessions
+      - OUTPUT_PATH=/output
+      - MODELS_PATH=/models
+      - SIRIL_BINARY=siril-cli
+      - ASTAP_BINARY=astap
+      - ASTAP_STAR_DB_PATH=/opt/astap/stars
+      - PIPELINE_MAX_RETRIES=3
+      - SESSION_STABILITY_DELAY=30.0
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Worker — GPU 0 ──────────────────────────────────────────────────────────
+  astro-worker-gpu0:
+    <<: *astro-common
+    container_name: astro-worker-gpu0
+    command:
+      - python
+      - -m
+      - arq
+      - app.workers.settings.WorkerSettings
+    environment:
+      - APP_NAME=Astro-Stack
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - INBOX_PATH=/inbox
+      - SESSIONS_PATH=/sessions
+      - OUTPUT_PATH=/output
+      - MODELS_PATH=/models
+      - SIRIL_BINARY=siril-cli
+      - ASTAP_BINARY=astap
+      - ASTAP_STAR_DB_PATH=/opt/astap/stars
+      - PIPELINE_MAX_RETRIES=3
+      - SESSION_STABILITY_DELAY=30.0
+      # GPU assignment — this worker uses GPU 0
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - WORKER_GPU_DEVICE=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu, compute, utility]
+
+  # ── Worker — GPU 1 ──────────────────────────────────────────────────────────
+  astro-worker-gpu1:
+    <<: *astro-common
+    container_name: astro-worker-gpu1
+    command:
+      - python
+      - -m
+      - arq
+      - app.workers.settings.WorkerSettings
+    environment:
+      - APP_NAME=Astro-Stack
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - INBOX_PATH=/inbox
+      - SESSIONS_PATH=/sessions
+      - OUTPUT_PATH=/output
+      - MODELS_PATH=/models
+      - SIRIL_BINARY=siril-cli
+      - ASTAP_BINARY=astap
+      - ASTAP_STAR_DB_PATH=/opt/astap/stars
+      - PIPELINE_MAX_RETRIES=3
+      - SESSION_STABILITY_DELAY=30.0
+      # GPU assignment — this worker uses GPU 1
+      - NVIDIA_VISIBLE_DEVICES=1
+      - CUDA_VISIBLE_DEVICES=1
+      - WORKER_GPU_DEVICE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu, compute, utility]
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: astro-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - astro-net
+
+  # ── Model initialiser (runs once, then exits) ───────────────────────────────
+  astro-init-models:
+    <<: *astro-common
+    container_name: astro-init-models
+    command: ["/bin/bash", "/app/scripts/init-models.sh"]
+    restart: "no"
+    profiles:
+      - init   # Only runs with: docker compose --profile init up
+
+volumes:
+  redis_data:
+
+networks:
+  astro-net:
+    driver: bridge
