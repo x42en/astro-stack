@@ -8,9 +8,19 @@ from __future__ import annotations
 
 from arq.connections import RedisSettings
 
-from app.core.config import get_settings
 from app.infrastructure.queue.broker import get_arq_redis_settings
 from app.workers.tasks import run_pipeline, shutdown, startup
+
+
+def _get_redis_settings() -> RedisSettings:
+    """Return ARQ Redis settings derived from application config.
+
+    This is called at module load time to create the class attribute for ARQ.
+
+    Returns:
+        :class:`arq.connections.RedisSettings` instance.
+    """
+    return get_arq_redis_settings()
 
 
 class WorkerSettings:
@@ -30,15 +40,7 @@ class WorkerSettings:
     functions = [run_pipeline]
     on_startup = startup
     on_shutdown = shutdown
-
-    @property
-    def redis_settings(self) -> RedisSettings:
-        """Return ARQ Redis settings derived from application config.
-
-        Returns:
-            :class:`arq.connections.RedisSettings` instance.
-        """
-        return get_arq_redis_settings()
+    redis_settings = _get_redis_settings()
 
     max_jobs: int = 2  # One per GPU; set to 1 for single GPU
     job_timeout: int = 3600  # 1 hour max per job
