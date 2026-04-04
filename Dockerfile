@@ -80,15 +80,15 @@ RUN pip install --upgrade pip setuptools wheel \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu126
 
-# Copy and install application dependencies
-COPY pyproject.toml .
-RUN pip install -e ".[prod]" || \
-    pip install \
-        fastapi uvicorn[standard] websockets \
+# Install all application dependencies BEFORE copying source
+# This ensures a clean, reproducible pip install
+# Note: [prod] extra does not exist in pyproject.toml — install deps explicitly
+RUN pip install \
+        fastapi "uvicorn[standard]" websockets \
         sqlmodel asyncpg alembic greenlet \
-        arq redis[hiredis] \
+        arq "redis[hiredis]" \
         pydantic pydantic-settings \
-        python-jose[cryptography] passlib[bcrypt] \
+        "python-jose[cryptography]" "passlib[bcrypt]" \
         httpx astropy rawpy numpy Pillow \
         watchdog python-multipart aiofiles anyio structlog
 
@@ -122,8 +122,7 @@ RUN useradd -m -s /bin/bash astro \
     && mkdir -p /inbox /sessions /output /models \
     && chown -R astro:astro /inbox /sessions /output /models
 
-# Copy venv and set PATH
-COPY --from=ai-tools /opt/venv /opt/venv
+# venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH="/app"
 
@@ -133,14 +132,11 @@ WORKDIR /app
 COPY --chown=astro:astro app/ ./app/
 COPY --chown=astro:astro pyproject.toml .
 
-# Install application in development mode
-# Note: Do NOT upgrade setuptools as torch requires setuptools<82
-RUN /opt/venv/bin/pip install -e .
+# Install only the app package itself (all deps already in venv from python-deps stage)
+# --no-deps avoids re-resolving dependencies and touching already-installed packages
+RUN pip install --no-deps -e .
 
-# Ensure alembic is installed (may have been skipped in editable install)
-RUN /opt/venv/bin/pip install alembic --quiet
-
-# Copy alembic configuration to app directory (WORKDIR is /app)
+# Copy alembic configuration
 COPY --chown=astro:astro alembic.ini ./alembic.ini
 COPY --chown=astro:astro alembic/ ./alembic/
 RUN mkdir -p alembic/versions

@@ -120,10 +120,8 @@ services:
   astro-api:
     <<: *astro-common
     container_name: astro-api
-    command: ["/opt/venv/bin/alembic", "upgrade", "head"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--loop", "uvloop"]
     environment:
-      - PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
-      - VIRTUAL_ENV=/opt/venv
       - APP_NAME=Astro-Stack
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - AUTH_ENABLED=${AUTH_ENABLED:-false}
