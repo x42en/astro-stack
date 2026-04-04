@@ -1,10 +1,10 @@
 # =============================================================================
 # Astro-Stack — Multi-stage Docker build
-# Base: NVIDIA CUDA 12.4 + Ubuntu 22.04
+# Base: NVIDIA CUDA 12.6.3 + cuDNN + Ubuntu 24.04
 # =============================================================================
 
 # ── Stage 1: System dependencies & build tools ─────────────────────────────
-FROM nvidia/cuda:12.4.0-cudnn-runtime-ubuntu22.04 AS system-base
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS system-base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
@@ -72,7 +72,7 @@ WORKDIR /build
 RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel \
     && pip3 install --no-cache-dir \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu124
+        --index-url https://download.pytorch.org/whl/cu126
 
 # Copy and install application dependencies
 COPY pyproject.toml .
