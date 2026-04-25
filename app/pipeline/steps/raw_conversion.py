@@ -154,18 +154,20 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
     from astropy.io import fits  # noqa: PLC0415
 
     with rawpy.imread(str(raw_path)) as raw:
-        rgb = raw.postprocess(
-            output_bps=16,
-            no_auto_bright=True,
-            use_camera_wb=True,
-            gamma=(1, 1),  # linear output — astrophotography requires unclipped linear data
-        )
-    # Convert HxWx3 → 3xHxW for FITS axis order
-    data = rgb.transpose(2, 0, 1).astype(np.float32)
+        # Read raw Bayer CFA data directly — do NOT debayer.
+        # Siril will calibrate (dark/flat) at the CFA level, then debayer,
+        # which is the correct astrophotography workflow.
+        bayer = raw.raw_image_visible.copy()          # uint16, shape (H, W)
+        bayer_pattern = raw.color_desc.decode("ascii")  # e.g. "RGGB"
+
+    data = bayer.astype(np.float32)
 
     hdu = fits.PrimaryHDU(data=data)
     hdu.header["ORIGINAL"] = str(raw_path.name)
-    hdu.header["BAYERPAT"] = "RGB"
+    # Standard Bayer headers that Siril reads to auto-detect the CFA pattern.
+    hdu.header["BAYERPAT"] = bayer_pattern
+    hdu.header["XBAYROFF"] = 0
+    hdu.header["YBAYROFF"] = 0
     hdu.writeto(str(fits_path), overwrite=True)
 
 

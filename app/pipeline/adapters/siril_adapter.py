@@ -268,6 +268,8 @@ class SirilAdapter:
         async def _collect() -> None:
             async for event in self.stream_output():
                 collected.append(event)
+                if event.event_type == SirilEventType.LOG:
+                    logger.debug("siril_log", command=command, message=event.message)
                 if event.event_type != SirilEventType.STATUS:
                     continue
                 # "starting" is informational only — keep collecting
@@ -281,12 +283,14 @@ class SirilAdapter:
                 )
                 if name_ok or event.status_verb in ("success", "error"):
                     if event.status_verb == "error":
+                        # Collect all preceding log messages for context
+                        log_context = [e.message for e in collected if e.event_type == SirilEventType.LOG]
                         raise PipelineStepException(
                             ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
                             f"Siril command '{command}' failed: {event.message}",
                             step_name=cmd_name,
                             retryable=True,
-                            details={"command": command, "siril_message": event.message},
+                            details={"command": command, "siril_message": event.message, "siril_log": log_context},
                         )
                     return
 

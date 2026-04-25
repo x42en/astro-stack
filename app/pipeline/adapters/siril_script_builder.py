@@ -200,8 +200,10 @@ class SirilScriptBuilder:
         if has_flats:
             flags.append("-flat=master-flat")
 
-        # rawpy.postprocess() already demosaics to RGB — do NOT pass -cfa/-debayer.
-        # Siril calibrates multi-channel FITS directly without debayering.
+        # Input is Bayer CFA FITS (2-D, single channel). Tell Siril to treat it
+        # as CFA data and debayer to RGB after calibration. The Bayer pattern
+        # is auto-detected from the BAYERPAT FITS header written by raw_conversion.
+        flags.append("-cfa -debayer")
 
         return " ".join(flags)
 
