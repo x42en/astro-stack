@@ -45,6 +45,22 @@ from app.pipeline.retry import RetryPolicy
 
 logger = get_logger(__name__)
 
+# Ordered pipeline step plan — (machine_name, display_name).
+# Used by the API to return all planned steps (including pending ones) in the
+# job response so the frontend can show the full checklist from the start.
+PIPELINE_STEP_PLAN: tuple[tuple[str, str], ...] = (
+    ("raw_conversion", "RAW → FITS Conversion"),
+    ("preprocessing", "Calibration & Stacking (Siril)"),
+    ("plate_solving", "Plate Solving (ASTAP)"),
+    ("gradient_removal", "Background Gradient Removal (GraXpert)"),
+    ("stretch_color", "Stretch & Colour Calibration (Siril)"),
+    ("denoise", "AI Noise Reduction (Cosmic Clarity)"),
+    ("sharpen", "AI Sharpening / Deconvolution (Cosmic Clarity)"),
+    ("super_resolution", "AI Super-Resolution 2× (Cosmic Clarity)"),
+    ("star_separation", "Star Separation (Cosmic Clarity Dark Star)"),
+    ("export", "Export (FITS / TIFF / JPEG / Thumbnail)"),
+)
+
 
 class PipelineOrchestrator:
     """Orchestrates the sequential execution of pipeline steps for a given job.

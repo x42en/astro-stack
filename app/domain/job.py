@@ -209,8 +209,9 @@ class JobStepRead(SQLModel):
     """Read schema for a single pipeline step result.
 
     Attributes:
-        id: Step record UUID.
+        id: Step record UUID (None for steps not yet started).
         step_name: Step identifier.
+        display_name: Human-readable step label.
         step_index: Ordinal position.
         status: Execution status.
         attempt_count: Number of attempts made.
@@ -220,8 +221,9 @@ class JobStepRead(SQLModel):
         output_metadata: Step-specific result data.
     """
 
-    id: uuid.UUID
+    id: Optional[uuid.UUID] = None
     step_name: str
+    display_name: str = ""
     step_index: int
     status: StepStatus
     attempt_count: int

@@ -8,11 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictException, ErrorCode, NotFoundException
 from app.core.logging import get_logger
-from app.domain.job import JobRead, JobStatus, JobStepRead, PipelineJob, ProfilePreset
+from app.domain.job import JobRead, JobStatus, JobStepRead, PipelineJob, ProfilePreset, StepStatus
 from app.domain.profile import ProcessingProfileConfig, get_preset_config
 from app.infrastructure.queue.broker import get_arq_pool
 from app.infrastructure.repositories.job_repo import JobRepository, JobStepRepository
 from app.infrastructure.repositories.session_repo import SessionRepository
+from app.pipeline.orchestrator import PIPELINE_STEP_PLAN
 
 logger = get_logger(__name__)
 
@@ -100,13 +101,14 @@ class JobService:
         return created
 
     async def get_job_with_steps(self, job_id: uuid.UUID) -> JobRead:
-        """Retrieve a job with its step results.
+        """Retrieve a job with its step results, including pending future steps.
 
         Args:
             job_id: Job UUID.
 
         Returns:
-            :class:`~app.domain.job.JobRead` including step details.
+            :class:`~app.domain.job.JobRead` with all planned steps, using
+            ``pending`` status for steps not yet started.
 
         Raises:
             NotFoundException: If the job does not exist.
@@ -117,21 +119,37 @@ class JobService:
                 ErrorCode.JOB_NOT_FOUND,
                 f"Job '{job_id}' not found.",
             )
-        steps = await self._step_repo.list_by_job(job_id)
-        step_reads = [
-            JobStepRead(
-                id=s.id,
-                step_name=s.step_name,
-                step_index=s.step_index,
-                status=s.status,
-                attempt_count=s.attempt_count,
-                started_at=s.started_at,
-                completed_at=s.completed_at,
-                error_code=s.error_code,
-                output_metadata=s.output_metadata,
-            )
-            for s in steps
-        ]
+        db_steps = {s.step_name: s for s in await self._step_repo.list_by_job(job_id)}
+
+        step_reads = []
+        for idx, (step_name, display_name) in enumerate(PIPELINE_STEP_PLAN):
+            db_step = db_steps.get(step_name)
+            if db_step:
+                step_reads.append(JobStepRead(
+                    id=db_step.id,
+                    step_name=db_step.step_name,
+                    display_name=display_name,
+                    step_index=db_step.step_index,
+                    status=db_step.status,
+                    attempt_count=db_step.attempt_count,
+                    started_at=db_step.started_at,
+                    completed_at=db_step.completed_at,
+                    error_code=db_step.error_code,
+                    output_metadata=db_step.output_metadata,
+                ))
+            else:
+                step_reads.append(JobStepRead(
+                    step_name=step_name,
+                    display_name=display_name,
+                    step_index=idx,
+                    status=StepStatus.PENDING,
+                    attempt_count=0,
+                    started_at=None,
+                    completed_at=None,
+                    error_code=None,
+                    output_metadata=None,
+                ))
+
         return JobRead(
             id=job.id,
             session_id=job.session_id,
