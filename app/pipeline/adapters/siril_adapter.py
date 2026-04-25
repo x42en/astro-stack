@@ -118,7 +118,7 @@ class SirilAdapter:
         self._in_pipe: Optional[str] = None
         self._out_pipe: Optional[str] = None
         self._out_file: Optional[asyncio.StreamReader] = None
-        self._in_file: Optional[asyncio.StreamWriter] = None
+        self._in_transport: Optional[asyncio.WriteTransport] = None
         self._settings = get_settings()
 
     async def __aenter__(self) -> "SirilAdapter":
@@ -192,8 +192,8 @@ class SirilAdapter:
             self._open_pipe_reader(self._out_pipe),
             timeout=15.0,
         )
-        # Open in pipe for writing
-        self._in_file = await asyncio.wait_for(
+        # Open in pipe for writing — returns the write transport directly
+        self._in_transport = await asyncio.wait_for(
             self._open_pipe_writer(self._in_pipe),
             timeout=15.0,
         )
@@ -208,13 +208,13 @@ class SirilAdapter:
         Closes named pipes and cleans up the process handle.
         """
         try:
-            if self._in_file is not None:
+            if self._in_transport is not None:
                 try:
                     await self.send_command("exit")
                 except Exception:  # noqa: BLE001
                     pass
-                self._in_file.close()
-                self._in_file = None
+                self._in_transport.close()
+                self._in_transport = None
         finally:
             if self._process is not None:
                 try:
@@ -235,11 +235,9 @@ class SirilAdapter:
         Raises:
             RuntimeError: If the adapter has not been started.
         """
-        if self._in_file is None:
+        if self._in_transport is None:
             raise RuntimeError("SirilAdapter not started.")
-        line = f"{command}\n"
-        self._in_file.write(line.encode())
-        await self._in_file.drain()
+        self._in_transport.write(f"{command}\n".encode())
         logger.debug("siril_command_sent", command=command)
 
     async def run_command(
@@ -349,22 +347,30 @@ class SirilAdapter:
         return reader
 
     @staticmethod
-    async def _open_pipe_writer(path: str) -> asyncio.StreamWriter:
+    async def _open_pipe_writer(path: str) -> asyncio.WriteTransport:
         """Open a named pipe for async writing.
+
+        Returns the raw write transport — avoids the asyncio.StreamWriter
+        dependency on ``_drain_helper`` which is absent on BaseProtocol.
 
         Args:
             path: Absolute path to the named pipe.
 
         Returns:
-            An :class:`asyncio.StreamWriter` bound to the pipe.
+            An :class:`asyncio.WriteTransport` bound to the pipe.
         """
         loop = asyncio.get_event_loop()
         fd = await loop.run_in_executor(None, lambda: os.open(path, os.O_WRONLY))
-        transport, protocol = await loop.connect_write_pipe(
-            asyncio.BaseProtocol, os.fdopen(fd, "wb", 0)
-        )
-        writer = asyncio.StreamWriter(transport, protocol, None, loop)  # type: ignore[arg-type]
-        return writer
+
+        class _NullProtocol(asyncio.BaseProtocol):
+            def connection_made(self, transport: asyncio.BaseTransport) -> None:  # noqa: D401
+                pass
+
+            def connection_lost(self, exc: Optional[Exception]) -> None:  # noqa: D401
+                pass
+
+        transport, _ = await loop.connect_write_pipe(_NullProtocol, os.fdopen(fd, "wb", 0))
+        return transport  # type: ignore[return-value]
 
     def _cleanup_pipes(self) -> None:
         """Remove the named pipe files if they exist."""
