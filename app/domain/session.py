@@ -167,6 +167,7 @@ class SessionRead(SQLModel):
     updated_at: datetime
 
 
+
 class SessionUpdate(SQLModel):
     """Schema for partial session updates.
 
