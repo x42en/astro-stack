@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.domain.session import AstroSession, SessionStatus
@@ -37,11 +38,45 @@ class SessionRepository(BaseRepository[AstroSession]):
         result = await self.session.execute(stmt)
         return result.first()
 
+    async def count_all(self, search: str | None = None) -> int:
+        """Return the total count of all sessions, optionally filtered by name search.
+
+        Args:
+            search: Optional name substring filter (case-insensitive).
+
+        Returns:
+            Total matching session count.
+        """
+        stmt = select(func.count(AstroSession.id))  # type: ignore[arg-type]
+        if search:
+            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def count_by_status(self, status: SessionStatus, search: str | None = None) -> int:
+        """Return the count of sessions with a given status.
+
+        Args:
+            status: The lifecycle status to filter by.
+            search: Optional name substring filter (case-insensitive).
+
+        Returns:
+            Total matching session count.
+        """
+        stmt = select(func.count(AstroSession.id)).where(  # type: ignore[arg-type]
+            AstroSession.status == status
+        )
+        if search:
+            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
     async def list_by_status(
         self,
         status: SessionStatus,
         offset: int = 0,
         limit: int = 100,
+        search: str | None = None,
     ) -> list[AstroSession]:
         """Retrieve sessions filtered by lifecycle status.
 
@@ -49,17 +84,15 @@ class SessionRepository(BaseRepository[AstroSession]):
             status: The desired :class:`~app.domain.session.SessionStatus`.
             offset: Pagination offset.
             limit: Maximum number of results.
+            search: Optional name substring filter (case-insensitive).
 
         Returns:
             List of matching sessions, ordered by creation time descending.
         """
-        stmt = (
-            select(AstroSession)
-            .where(AstroSession.status == status)
-            .order_by(AstroSession.created_at.desc())  # type: ignore[attr-defined]
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = select(AstroSession).where(AstroSession.status == status)
+        if search:
+            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+        stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.all())
 
@@ -67,22 +100,22 @@ class SessionRepository(BaseRepository[AstroSession]):
         self,
         offset: int = 0,
         limit: int = 100,
+        search: str | None = None,
     ) -> list[AstroSession]:
         """Retrieve all sessions ordered by creation time (newest first).
 
         Args:
             offset: Pagination offset.
             limit: Maximum number of results.
+            search: Optional name substring filter (case-insensitive).
 
         Returns:
             Paginated list of sessions.
         """
-        stmt = (
-            select(AstroSession)
-            .order_by(AstroSession.created_at.desc())  # type: ignore[attr-defined]
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = select(AstroSession)
+        if search:
+            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+        stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.all())
 
