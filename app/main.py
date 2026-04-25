@@ -155,18 +155,28 @@ def create_app() -> FastAPI:
     app.include_router(ws_router)
 
     # ── Health check ──────────────────────────────────────────────────────────
-    @app.get("/health", tags=["health"], summary="Health check")
-    async def health_check() -> dict:
-        """Return application health status.
-
-        Returns:
-            Dict with ``status``, ``version``, and ``app_name``.
-        """
+    # Exposed on two paths:
+    #   /health        — used by Docker HEALTHCHECK and Traefik infra probes
+    #   /api/v1/health — used by the frontend Settings page (axios baseURL = /api/v1)
+    def _health_body() -> dict:
         return {
             "status": "ok",
             "version": settings.app_version,
             "app_name": settings.app_name,
         }
+
+    @app.get("/health", tags=["health"], summary="Health check", include_in_schema=False)
+    async def health_check() -> dict:
+        return _health_body()
+
+    @app.get("/api/v1/health", tags=["health"], summary="Health check (v1)")
+    async def health_check_v1() -> dict:
+        """Return application health status.
+
+        Returns:
+            Dict with ``status``, ``version``, and ``app_name``.
+        """
+        return _health_body()
 
     return app
 
