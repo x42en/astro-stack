@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     frame_count_darks=session.frame_count_darks,
                     frame_count_flats=session.frame_count_flats,
                     frame_count_bias=session.frame_count_bias,
-                    input_format=session.input_format.value if session.input_format else "fits",
+                    input_format=session.input_format if session.input_format else "fits",
                 )
                 await event_bus.publish_session_event(session.id, event)
             except Exception as exc:  # noqa: BLE001

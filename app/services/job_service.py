@@ -171,7 +171,7 @@ class JobService:
         if job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.FAILED):
             raise ConflictException(
                 ErrorCode.JOB_ALREADY_COMPLETED,
-                f"Job '{job_id}' is already in terminal state: {job.status.value}.",
+                f"Job '{job_id}' is already in terminal state: {job.status}.",
             )
 
         updated = await self._job_repo.update_status(job_id, JobStatus.CANCELLED)

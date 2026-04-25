@@ -258,7 +258,7 @@ async def start_processing(
         preset=preset,
         profile_id=profile_id,
     )
-    return {"job_id": str(job.id), "status": job.status.value}
+    return {"job_id": str(job.id), "status": job.status}
 
 
 @router.post(
