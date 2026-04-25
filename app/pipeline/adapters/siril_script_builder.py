@@ -200,11 +200,8 @@ class SirilScriptBuilder:
         if has_flats:
             flags.append("-flat=master-flat")
 
-        pattern = self.config.debayer_pattern.lower()
-        if pattern == "auto":
-            flags.append("-cfa -debayer")
-        else:
-            flags.append(f"-cfa={pattern} -debayer")
+        # rawpy.postprocess() already demosaics to RGB — do NOT pass -cfa/-debayer.
+        # Siril calibrates multi-channel FITS directly without debayering.
 
         return " ".join(flags)
 

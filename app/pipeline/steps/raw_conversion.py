@@ -158,6 +158,7 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
             output_bps=16,
             no_auto_bright=True,
             use_camera_wb=True,
+            gamma=(1, 1),  # linear output — astrophotography requires unclipped linear data
         )
     # Convert HxWx3 → 3xHxW for FITS axis order
     data = rgb.transpose(2, 0, 1).astype(np.float32)

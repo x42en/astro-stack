@@ -268,20 +268,27 @@ class SirilAdapter:
         async def _collect() -> None:
             async for event in self.stream_output():
                 collected.append(event)
-                if event.event_type == SirilEventType.STATUS:
-                    if event.command_name.lower() == cmd_name or event.status_verb in (
-                        "success",
-                        "error",
-                    ):
-                        if event.status_verb == "error":
-                            raise PipelineStepException(
-                                ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
-                                f"Siril command '{command}' failed: {event.message}",
-                                step_name=cmd_name,
-                                retryable=True,
-                                details={"command": command, "siril_message": event.message},
-                            )
-                        return
+                if event.event_type != SirilEventType.STATUS:
+                    continue
+                # "starting" is informational only — keep collecting
+                if event.status_verb == "starting":
+                    continue
+                # Match by command name when available; fall back to any terminal status
+                name_ok = (
+                    event.command_name.lower() == cmd_name
+                    if event.command_name
+                    else True
+                )
+                if name_ok or event.status_verb in ("success", "error"):
+                    if event.status_verb == "error":
+                        raise PipelineStepException(
+                            ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
+                            f"Siril command '{command}' failed: {event.message}",
+                            step_name=cmd_name,
+                            retryable=True,
+                            details={"command": command, "siril_message": event.message},
+                        )
+                    return
 
         await asyncio.wait_for(_collect(), timeout=timeout)
         return collected
