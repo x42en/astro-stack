@@ -64,7 +64,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             Total matching session count.
         """
         stmt = select(func.count(AstroSession.id)).where(  # type: ignore[arg-type]
-            AstroSession.status == status
+            AstroSession.status == status.value
         )
         if search:
             stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
@@ -89,7 +89,7 @@ class SessionRepository(BaseRepository[AstroSession]):
         Returns:
             List of matching sessions, ordered by creation time descending.
         """
-        stmt = select(AstroSession).where(AstroSession.status == status)
+        stmt = select(AstroSession).where(AstroSession.status == status.value)
         if search:
             stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]

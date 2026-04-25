@@ -63,7 +63,7 @@ class JobRepository(BaseRepository[PipelineJob]):
         """
         stmt = select(PipelineJob).where(
             PipelineJob.session_id == session_id,
-            PipelineJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),  # type: ignore[attr-defined]
+            PipelineJob.status.in_([JobStatus.PENDING.value, JobStatus.RUNNING.value]),  # type: ignore[attr-defined]
         )
         result = await self.session.execute(stmt)
         return result.scalars().first()

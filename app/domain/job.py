@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Text, func
+from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlmodel import Column, Field, SQLModel
 
@@ -106,13 +106,19 @@ class PipelineJob(SQLModel, table=True):
     session_id: uuid.UUID = Field(
         sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True)
     )
-    profile_preset: ProfilePreset = Field(default=ProfilePreset.STANDARD)
+    profile_preset: ProfilePreset = Field(
+        default=ProfilePreset.STANDARD,
+        sa_column=Column(String(50), nullable=False),
+    )
     profile_id: Optional[uuid.UUID] = Field(
         default=None,
         sa_column=Column(PG_UUID(as_uuid=True), nullable=True),
     )
 
-    status: JobStatus = Field(default=JobStatus.PENDING, index=True)
+    status: JobStatus = Field(
+        default=JobStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
     current_step: Optional[str] = Field(default=None, max_length=100)
     arq_job_id: Optional[str] = Field(default=None, max_length=255)
 
@@ -173,7 +179,10 @@ class JobStep(SQLModel, table=True):
     job_id: uuid.UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True))
     step_name: str = Field(max_length=100, index=True)
     step_index: int = Field(ge=0)
-    status: StepStatus = Field(default=StepStatus.PENDING, index=True)
+    status: StepStatus = Field(
+        default=StepStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
     attempt_count: int = Field(default=0, ge=0)
 
     started_at: Optional[datetime] = Field(

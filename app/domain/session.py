@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Optional
 
 from sqlmodel import Column, Field, SQLModel
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, String, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 
@@ -82,8 +82,14 @@ class AstroSession(SQLModel, table=True):
     )
     name: str = Field(max_length=255, index=True)
     inbox_path: str = Field(max_length=1024)
-    status: SessionStatus = Field(default=SessionStatus.PENDING, index=True)
-    input_format: Optional[InputFormat] = Field(default=None)
+    status: SessionStatus = Field(
+        default=SessionStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
+    input_format: Optional[InputFormat] = Field(
+        default=None,
+        sa_column=Column(String(20), nullable=True),
+    )
 
     frame_count_lights: int = Field(default=0, ge=0)
     frame_count_darks: int = Field(default=0, ge=0)
