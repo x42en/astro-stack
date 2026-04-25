@@ -24,8 +24,10 @@ entryPoints:
   websecure:
     address: ":443"
     http:
-      tls:
-        certResolver: letsencrypt
+      tls: {}  # Uses Traefik's built-in self-signed cert — safe for dev/testing.
+      # [PROD] Replace the line above with the block below to enable Let's Encrypt:
+      # tls:
+      #   certResolver: letsencrypt
 
 certificatesResolvers:
   letsencrypt:

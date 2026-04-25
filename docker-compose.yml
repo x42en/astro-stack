@@ -148,7 +148,8 @@ services:
       # HTTPS router
       - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.astro-api-secure.entrypoints=websecure"
-      - "traefik.http.routers.astro-api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.astro-api-secure.tls=true"  # self-signed cert (dev)
+      # [PROD] Replace the line above with: traefik.http.routers.astro-api-secure.tls.certresolver=letsencrypt
       - "traefik.http.routers.astro-api-secure.service=astro-api-svc"
       # Backend service
       - "traefik.http.services.astro-api-svc.loadbalancer.server.port=8080"
@@ -299,7 +300,8 @@ services:
       # HTTPS router — lower priority than astro-api-secure (shorter rule = lower precedence)
       - "traefik.http.routers.astro-ui-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`)"
       - "traefik.http.routers.astro-ui-secure.entrypoints=websecure"
-      - "traefik.http.routers.astro-ui-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.astro-ui-secure.tls=true"  # self-signed cert (dev)
+      # [PROD] Replace the line above with: traefik.http.routers.astro-ui-secure.tls.certresolver=letsencrypt
       - "traefik.http.routers.astro-ui-secure.service=astro-ui-svc"
       # Backend service
       - "traefik.http.services.astro-ui-svc.loadbalancer.server.port=80"

@@ -5,8 +5,11 @@ http:
         frameDeny: true
         contentTypeNosniff: true
         browserXssFilter: true
-        forceSTSHeader: true
-        stsIncludeSubdomains: true
-        stsSeconds: 31536000
+        # [PROD] Uncomment the three lines below when deploying with a valid TLS certificate.
+        # WARNING: once a browser receives HSTS it will refuse self-signed certs for
+        # stsSeconds seconds — clear chrome://net-internals/#hsts before re-testing locally.
+        # forceSTSHeader: true
+        # stsIncludeSubdomains: true
+        # stsSeconds: 31536000
     compress:
       compress: {}
