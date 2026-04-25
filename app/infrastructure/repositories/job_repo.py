@@ -47,7 +47,7 @@ class JobRepository(BaseRepository[PipelineJob]):
             .limit(limit)
         )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_active_job_for_session(
         self,
@@ -66,7 +66,7 @@ class JobRepository(BaseRepository[PipelineJob]):
             PipelineJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),  # type: ignore[attr-defined]
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def update_status(
         self,
@@ -112,7 +112,7 @@ class JobStepRepository(BaseRepository[JobStep]):
             select(JobStep).where(JobStep.job_id == job_id).order_by(JobStep.step_index)  # type: ignore[attr-defined]
         )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_by_job_and_name(
         self,
@@ -133,7 +133,7 @@ class JobStepRepository(BaseRepository[JobStep]):
             JobStep.step_name == step_name,
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def upsert_step(self, step: JobStep) -> JobStep:
         """Insert or update a step record.

@@ -36,7 +36,7 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(AstroSession).where(AstroSession.inbox_path == inbox_path)
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def count_all(self, search: str | None = None) -> int:
         """Return the total count of all sessions, optionally filtered by name search.
@@ -94,7 +94,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def list_all_ordered(
         self,
@@ -117,7 +117,7 @@ class SessionRepository(BaseRepository[AstroSession]):
             stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def update_status(
         self,

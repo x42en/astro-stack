@@ -69,7 +69,7 @@ class BaseRepository(ABC, Generic[ModelT]):
         """
         stmt = select(self.model).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def create(self, instance: ModelT) -> ModelT:
         """Persist a new record to the database.

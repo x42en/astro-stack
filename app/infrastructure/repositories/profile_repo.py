@@ -63,7 +63,7 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
                 .limit(limit)
             )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_by_name_for_user(
         self,
@@ -86,4 +86,4 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
             ProcessingProfile.owner_user_id == owner_user_id,
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
