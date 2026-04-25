@@ -141,14 +141,17 @@ services:
       - SESSION_STABILITY_DELAY=30.0
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.astro-api.rule=Host(`${TRAEFIK_HOST:-astro.localhost}`)"
+      # HTTP router (redirected to HTTPS by entrypoint-level rule in traefik.yml)
+      - "traefik.http.routers.astro-api.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.astro-api.entrypoints=web"
-      - "traefik.http.routers.astro-api.service=astro-api-service"
-      - "traefik.http.services.astro-api-service.loadbalancer.server.port=8080"
-      - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-astro.localhost}`)"
+      - "traefik.http.routers.astro-api.service=astro-api-svc"
+      # HTTPS router
+      - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.astro-api-secure.entrypoints=websecure"
-      - "traefik.http.routers.astro-api-secure.tls.certResolver=letsencrypt"
-      - "traefik.http.routers.astro-api-secure.service=astro-api-service"
+      - "traefik.http.routers.astro-api-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.astro-api-secure.service=astro-api-svc"
+      # Backend service
+      - "traefik.http.services.astro-api-svc.loadbalancer.server.port=8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -270,6 +273,36 @@ services:
     restart: "no"
     profiles:
       - init   # Only runs with: docker compose --profile init up
+
+  # ── Astro UI ────────────────────────────────────────────────────────────────
+  astro-ui:
+    image: ghcr.io/bitsdiver/astro-ui:latest
+    container_name: astro-ui
+    restart: unless-stopped
+    # Port is intentionally not exposed — traffic arrives exclusively via Traefik.
+    environment:
+      # VITE_* variables are baked in at build time and have no effect on the
+      # pre-built image. Use the Settings page in the UI to reconfigure at runtime.
+      # These values are provided as documentation for local rebuilds only.
+      VITE_API_BASE_URL: https://${TRAEFIK_HOST:-astro.circle-cyber.com}/api/v1
+      VITE_WS_BASE_URL: wss://${TRAEFIK_HOST:-astro.circle-cyber.com}/ws
+    depends_on:
+      - astro-api
+    networks:
+      - astro-net
+    labels:
+      - "traefik.enable=true"
+      # HTTP router (redirected to HTTPS by entrypoint-level rule in traefik.yml)
+      - "traefik.http.routers.astro-ui.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`)"
+      - "traefik.http.routers.astro-ui.entrypoints=web"
+      - "traefik.http.routers.astro-ui.service=astro-ui-svc"
+      # HTTPS router — lower priority than astro-api-secure (shorter rule = lower precedence)
+      - "traefik.http.routers.astro-ui-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`)"
+      - "traefik.http.routers.astro-ui-secure.entrypoints=websecure"
+      - "traefik.http.routers.astro-ui-secure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.astro-ui-secure.service=astro-ui-svc"
+      # Backend service
+      - "traefik.http.services.astro-ui-svc.loadbalancer.server.port=80"
 
 volumes:
   postgres_data:

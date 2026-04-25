@@ -120,20 +120,40 @@ class SessionService:
         offset: int = 0,
         limit: int = 100,
         status: SessionStatus | None = None,
+        search: str | None = None,
     ) -> list[AstroSession]:
-        """List all sessions, optionally filtered by status.
+        """List all sessions, optionally filtered by status and/or name.
 
         Args:
             offset: Pagination offset.
             limit: Maximum number of results.
             status: Optional status filter.
+            search: Optional name substring filter (case-insensitive).
 
         Returns:
             Ordered list of sessions.
         """
         if status is not None:
-            return await self._session_repo.list_by_status(status, offset, limit)
-        return await self._session_repo.list_all_ordered(offset, limit)
+            return await self._session_repo.list_by_status(status, offset, limit, search)
+        return await self._session_repo.list_all_ordered(offset, limit, search)
+
+    async def count_sessions(
+        self,
+        status: SessionStatus | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Return the total count of sessions matching the given filters.
+
+        Args:
+            status: Optional status filter.
+            search: Optional name substring filter (case-insensitive).
+
+        Returns:
+            Total matching session count.
+        """
+        if status is not None:
+            return await self._session_repo.count_by_status(status, search)
+        return await self._session_repo.count_all(search)
 
     async def update_plate_solve_result(
         self,
