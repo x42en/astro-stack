@@ -82,11 +82,11 @@ class AstroSession(SQLModel, table=True):
     )
     name: str = Field(max_length=255, index=True)
     inbox_path: str = Field(max_length=1024)
-    status: SessionStatus = Field(
+    status: str = Field(
         default=SessionStatus.PENDING,
         sa_column=Column(String(50), nullable=False, index=True),
     )
-    input_format: Optional[InputFormat] = Field(
+    input_format: Optional[str] = Field(
         default=None,
         sa_column=Column(String(20), nullable=True),
     )

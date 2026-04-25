@@ -103,7 +103,7 @@ class BaseRepository(ABC, Generic[ModelT]):
         if instance is None:
             return None
         for field, value in data.items():
-            if value is not None and hasattr(instance, field):
+            if hasattr(instance, field):
                 setattr(instance, field, value)
         self.session.add(instance)
         await self.session.commit()

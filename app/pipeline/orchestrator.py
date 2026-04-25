@@ -467,7 +467,7 @@ class PipelineOrchestrator:
         result = await self.db_session.execute(
             select(AstroSession).where(AstroSession.id == self.session_id)
         )
-        session_record = result.first()
+        session_record = result.scalars().first()
         if session_record is None:
             return
 

@@ -17,6 +17,22 @@ import sys
 import structlog
 
 
+def _safe_add_logger_name(
+    logger: object,
+    method_name: str,
+    event_dict: structlog.types.EventDict,
+) -> structlog.types.EventDict:
+    """Wrapper around add_logger_name that tolerates a None logger.
+
+    ARQ's internal stdlib logger calls can pass None as the logger instance,
+    which causes add_logger_name to raise AttributeError. This wrapper skips
+    the processor in that case.
+    """
+    if logger is None:
+        return event_dict
+    return structlog.stdlib.add_logger_name(logger, method_name, event_dict)
+
+
 def configure_logging(log_level: str = "info") -> None:
     """Configure structlog for the application.
 
@@ -30,7 +46,7 @@ def configure_logging(log_level: str = "info") -> None:
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_logger_name,
+        _safe_add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),

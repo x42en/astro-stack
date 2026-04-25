@@ -106,7 +106,7 @@ class PipelineJob(SQLModel, table=True):
     session_id: uuid.UUID = Field(
         sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True)
     )
-    profile_preset: ProfilePreset = Field(
+    profile_preset: str = Field(
         default=ProfilePreset.STANDARD,
         sa_column=Column(String(50), nullable=False),
     )
@@ -115,7 +115,7 @@ class PipelineJob(SQLModel, table=True):
         sa_column=Column(PG_UUID(as_uuid=True), nullable=True),
     )
 
-    status: JobStatus = Field(
+    status: str = Field(
         default=JobStatus.PENDING,
         sa_column=Column(String(50), nullable=False, index=True),
     )
@@ -179,7 +179,7 @@ class JobStep(SQLModel, table=True):
     job_id: uuid.UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True))
     step_name: str = Field(max_length=100, index=True)
     step_index: int = Field(ge=0)
-    status: StepStatus = Field(
+    status: str = Field(
         default=StepStatus.PENDING,
         sa_column=Column(String(50), nullable=False, index=True),
     )
