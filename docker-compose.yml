@@ -315,6 +315,7 @@ volumes:
 networks:
   astro-net:
     driver: bridge
+    name: astro-net  # Pin the name to avoid Docker Compose project-prefix (astro-stack_astro-net)
 
 # Enable NVIDIA GPU support for all services
 x-gpu-common: &gpu-common
