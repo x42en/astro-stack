@@ -50,9 +50,12 @@ class WebSocketConnectionManager:
         self._job_connections: dict[str, set[WebSocket]] = defaultdict(set)
         # session_id → set of WebSocket connections
         self._session_connections: dict[str, set[WebSocket]] = defaultdict(set)
+        # Global broadcast WebSocket connections
+        self._broadcast_connections: set[WebSocket] = set()
         # Background tasks per channel
         self._job_tasks: dict[str, asyncio.Task] = {}
         self._session_tasks: dict[str, asyncio.Task] = {}
+        self._broadcast_task: asyncio.Task | None = None
 
     async def connect_job(
         self,
@@ -210,3 +213,50 @@ class WebSocketConnectionManager:
             pass
         except Exception as exc:  # noqa: BLE001
             logger.warning("ws_session_forward_error", session_id=str(session_id), error=str(exc))
+
+    async def connect_broadcast(self, websocket: WebSocket) -> None:
+        """Accept and register a WebSocket connection for the global broadcast stream.
+
+        Starts the shared broadcast forwarding task if this is the first client.
+
+        Args:
+            websocket: The accepted WebSocket connection.
+        """
+        await websocket.accept()
+        self._broadcast_connections.add(websocket)
+
+        if self._broadcast_task is None or self._broadcast_task.done():
+            self._broadcast_task = asyncio.create_task(
+                self._forward_broadcast_events(),
+                name="ws_broadcast",
+            )
+            logger.debug("ws_broadcast_subscription_started")
+
+    async def disconnect_broadcast(self, websocket: WebSocket) -> None:
+        """Remove a WebSocket connection from the broadcast registry.
+
+        Cancels the forwarding task when the last client disconnects.
+
+        Args:
+            websocket: The WebSocket connection to remove.
+        """
+        self._broadcast_connections.discard(websocket)
+        if not self._broadcast_connections and self._broadcast_task:
+            self._broadcast_task.cancel()
+            self._broadcast_task = None
+            logger.debug("ws_broadcast_subscription_stopped")
+
+    async def _forward_broadcast_events(self) -> None:
+        """Subscribe to the global broadcast Redis channel and forward to all clients."""
+        try:
+            async for raw in self.event_bus.subscribe_to_broadcast():
+                payload = json.dumps(raw)
+                for ws in list(self._broadcast_connections):
+                    try:
+                        await ws.send_text(payload)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ws_broadcast_forward_error", error=str(exc))

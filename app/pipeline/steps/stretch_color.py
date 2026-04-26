@@ -11,6 +11,7 @@ from app.infrastructure.queue.events_bus import EventBus
 from app.pipeline.adapters.siril_adapter import SirilAdapter, SirilEventType
 from app.pipeline.adapters.siril_script_builder import SirilScriptBuilder
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -111,8 +112,20 @@ class StretchColorStep(PipelineStep):
         context.stretched_fits_path = stretched_path
         logger.info("stretch_color_done", output=str(stretched_path))
 
+        # Generate a JPEG preview from the stretched image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "stretch_color.jpg"
+            await save_step_preview(stretched_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/stretch_color"
+        except Exception:  # noqa: BLE001
+            logger.warning("stretch_color_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"stretched_fits_path": str(stretched_path)},
+            metadata={
+                "stretched_fits_path": str(stretched_path),
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message="Stretch and colour calibration complete.",
         )

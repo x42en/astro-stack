@@ -9,6 +9,7 @@ from typing import Any, Generic, Optional, TypeVar
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -337,3 +338,40 @@ async def delete_scratch(
 
     file_store = FileStore()
     await file_store.cleanup_work_dir(session_id)
+
+
+@router.get(
+    "/{session_id}/step-preview/{step_name}",
+    response_class=FileResponse,
+    summary="Get a per-step JPEG preview",
+    description=(
+        "Returns the JPEG preview generated after a specific pipeline step. "
+        "Returns 404 if the step has not yet produced a preview."
+    ),
+)
+async def get_step_preview(
+    session_id: uuid.UUID,
+    step_name: str,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> FileResponse:
+    """Serve a per-step JPEG preview image.
+
+    Args:
+        session_id: Session UUID.
+        step_name: Machine-readable step name (e.g. ``preprocessing``).
+        _user: Injected auth user.
+
+    Returns:
+        JPEG image as a :class:`~fastapi.responses.FileResponse`.
+
+    Raises:
+        HTTPException: 404 if the preview does not exist yet.
+    """
+    file_store = FileStore()
+    preview_path = file_store.step_preview_path(session_id, step_name)
+    if not preview_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No preview available for step '{step_name}'.",
+        )
+    return FileResponse(str(preview_path), media_type="image/jpeg")

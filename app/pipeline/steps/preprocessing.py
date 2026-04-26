@@ -22,6 +22,7 @@ from app.domain.ws_event import LogEvent, LogLevel, LogSource, ProgressEvent
 from app.pipeline.adapters.siril_adapter import SirilAdapter, SirilEventType
 from app.pipeline.adapters.siril_script_builder import SirilScriptBuilder
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -148,8 +149,20 @@ class PreprocessingStep(PipelineStep):
         context.stacked_fits_path = stacked_path
         logger.info("preprocessing_done", stacked_fits=str(stacked_path))
 
+        # Generate a JPEG preview from the stacked image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "preprocessing.jpg"
+            await save_step_preview(stacked_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
+        except Exception:  # noqa: BLE001
+            logger.warning("preprocessing_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"stacked_fits_path": str(stacked_path)},
+            metadata={
+                "stacked_fits_path": str(stacked_path),
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message=f"Stacked FITS created at {stacked_path.name}",
         )

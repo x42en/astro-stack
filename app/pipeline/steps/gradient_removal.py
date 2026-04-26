@@ -8,6 +8,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.adapters.graxpert_adapter import GraXpertAdapter
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -98,8 +99,21 @@ class GradientRemovalStep(PipelineStep):
         context.background_removed_path = output_path
         logger.info("gradient_removal_done", output=str(output_path), method=method)
 
+        # Generate a JPEG preview from the background-removed image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "gradient_removal.jpg"
+            await save_step_preview(output_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/gradient_removal"
+        except Exception:  # noqa: BLE001
+            logger.warning("gradient_removal_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"background_removed_path": str(output_path), "method": method},
+            metadata={
+                "background_removed_path": str(output_path),
+                "method": method,
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message=f"Background gradient removed using {method} method.",
         )

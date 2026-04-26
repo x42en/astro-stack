@@ -155,6 +155,23 @@ class EventBus:
         await self._publisher.publish(channel, payload)
         logger.debug("session_event_published", channel=channel, event_type=event.type)
 
+    async def publish_broadcast(self, event: BaseEvent) -> None:
+        """Publish an event to the global broadcast channel.
+
+        All connected ``/ws/broadcast`` clients will receive this event.
+
+        Args:
+            event: Any typed event inheriting from :class:`~app.domain.ws_event.BaseEvent`.
+
+        Raises:
+            RuntimeError: If the bus has not been connected.
+        """
+        if self._publisher is None:
+            raise RuntimeError("EventBus not connected. Call connect() first.")
+        payload = event.model_dump_json()
+        await self._publisher.publish(BROADCAST_CHANNEL, payload)
+        logger.debug("broadcast_event_published", event_type=event.type)
+
     async def subscribe_to_job(
         self,
         job_id: uuid.UUID,
@@ -215,3 +232,28 @@ class EventBus:
         finally:
             await pubsub.unsubscribe(channel)
             logger.debug("unsubscribed_from_session", channel=channel)
+
+    async def subscribe_to_broadcast(self) -> AsyncGenerator[dict, None]:
+        """Subscribe to the global broadcast channel and yield raw message dicts.
+
+        Used by the ``/ws/broadcast`` WebSocket endpoint to forward session-level
+        status changes to all connected clients.
+
+        Yields:
+            Parsed JSON dicts from the Redis broadcast channel.
+
+        Raises:
+            RuntimeError: If the bus has not been connected.
+        """
+        if self._subscriber is None:
+            raise RuntimeError("EventBus not connected. Call connect() first.")
+        pubsub = self._subscriber.pubsub()
+        await pubsub.subscribe(BROADCAST_CHANNEL)
+        logger.debug("subscribed_to_broadcast")
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    yield json.loads(message["data"])
+        finally:
+            await pubsub.unsubscribe(BROADCAST_CHANNEL)
+            logger.debug("unsubscribed_from_broadcast")

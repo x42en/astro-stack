@@ -23,6 +23,7 @@ from app.core.errors import AstroStackException
 from app.core.logging import get_logger
 from app.domain.job import JobStatus
 from app.domain.profile import ProcessingProfileConfig
+from app.domain.ws_event import SessionStatusEvent
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository
 from app.infrastructure.storage.file_store import FileStore
@@ -102,11 +103,26 @@ async def run_pipeline(
                 # steps (e.g. raw_conversion), so converted FITS in work_dir must
                 # be preserved across the ARQ-level retry.
                 raise Retry(defer=30) from exc
+            # Non-retryable failure: notify clients and clean up
+            failed_event = SessionStatusEvent(
+                session_id=session_id,
+                new_status="failed",
+                job_status="failed",
+            )
+            await event_bus.publish_session_event(session_id, failed_event)
+            await event_bus.publish_broadcast(failed_event)
             await file_store.cleanup_work_dir(session_id)
             return {"error": exc.message, "error_code": exc.error_code.value}
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("pipeline_task_unexpected_error", job_id=job_id_str)
+            failed_event = SessionStatusEvent(
+                session_id=session_id,
+                new_status="failed",
+                job_status="failed",
+            )
+            await event_bus.publish_session_event(session_id, failed_event)
+            await event_bus.publish_broadcast(failed_event)
             await file_store.cleanup_work_dir(session_id)
             return {"error": str(exc), "error_code": "SYS_INTERNAL_ERROR"}
 

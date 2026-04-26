@@ -34,6 +34,7 @@ from app.domain.ws_event import (
     CompletedEvent,
     ErrorEvent,
     ProgressEvent,
+    SessionStatusEvent,
     StepStatusEvent,
     StepStatusValue,
 )
@@ -129,6 +130,15 @@ class PipelineOrchestrator:
         # Mark job as running
         await self._job_repo.update_status(self.job_id, JobStatus.RUNNING)
 
+        # Notify clients that the session is now processing
+        processing_event = SessionStatusEvent(
+            session_id=self.session_id,
+            new_status="processing",
+            job_status="running",
+        )
+        await self.event_bus.publish_session_event(self.session_id, processing_event)
+        await self.event_bus.publish_broadcast(processing_event)
+
         # Build context
         context = PipelineContext(
             job_id=self.job_id,
@@ -203,6 +213,16 @@ class PipelineOrchestrator:
             outputs={k: v for k, v in final_outputs.items() if isinstance(v, str)},
         )
         await self.event_bus.publish_job_event(self.job_id, completed_event)
+
+        # Notify the session channel and broadcast so all clients can refresh
+        status_event = SessionStatusEvent(
+            session_id=self.session_id,
+            new_status="completed",
+            job_status="completed",
+        )
+        await self.event_bus.publish_session_event(self.session_id, status_event)
+        await self.event_bus.publish_broadcast(status_event)
+
         logger.info("pipeline_completed", job_id=str(self.job_id), duration=duration)
 
         return final_outputs

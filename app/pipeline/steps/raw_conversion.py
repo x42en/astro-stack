@@ -23,6 +23,7 @@ from app.core.errors import ErrorCode, PipelineStepException
 from app.core.logging import get_logger
 from app.infrastructure.storage.file_store import FITS_EXTENSIONS, RAW_DSLR_EXTENSIONS
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -103,13 +104,35 @@ class RawConversionStep(PipelineStep):
                     details={"file": str(raw_path)},
                 ) from exc
 
+        # Capture first raw light path before remapping (remap overwrites frames in-place).
+        raw_light_files = [
+            f for f in frames.get("lights", []) if f.suffix.lower() in RAW_DSLR_EXTENSIONS
+        ]
+        first_raw_light = raw_light_files[0] if raw_light_files else None
+
         # Update frame paths in context to point to converted FITS files
         _remap_frames_to_fits(frames, context.work_dir)
+
+        # Generate a JPEG preview from the first converted light frame.
+        # Non-critical: a failure here must not abort the pipeline.
+        preview_url: str | None = None
+        if first_raw_light is not None:
+            first_fits = _target_fits_path(first_raw_light, context.work_dir)
+            if first_fits.exists():
+                try:
+                    preview_path = context.output_dir / "previews" / "raw_conversion.jpg"
+                    await save_step_preview(first_fits, preview_path)
+                    preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/raw_conversion"
+                except Exception:  # noqa: BLE001
+                    logger.warning("raw_conversion_preview_failed")
 
         logger.info("raw_conversion_done", converted=converted)
         return StepResult(
             success=True,
-            metadata={"converted_count": converted},
+            metadata={
+                "converted_count": converted,
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message=f"Converted {converted} RAW files to FITS.",
         )
 

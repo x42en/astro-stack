@@ -16,6 +16,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
 from app.core.errors import ErrorCode, PipelineStepException
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -96,6 +97,15 @@ class ExportStep(PipelineStep):
             jpeg=str(jpeg_out),
         )
 
+        # Copy the export JPEG into the per-step previews directory. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "export.jpg"
+            await save_step_preview(source_fits, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/export"
+        except Exception:  # noqa: BLE001
+            logger.warning("export_preview_failed")
+
         return StepResult(
             success=True,
             metadata={
@@ -103,6 +113,7 @@ class ExportStep(PipelineStep):
                 "tiff_path": str(tiff_out),
                 "jpeg_path": str(jpeg_out),
                 "thumbnail_path": str(thumb_out),
+                **({"preview_url": preview_url} if preview_url else {}),
             },
             message="Export complete.",
         )

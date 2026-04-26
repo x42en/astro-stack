@@ -7,6 +7,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.adapters.cosmic_adapter import CosmicClarityAdapter
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -73,8 +74,20 @@ class DenoiseStep(PipelineStep):
         context.denoised_path = output_path
         logger.info("denoise_done", output=str(output_path))
 
+        # Generate a JPEG preview from the denoised image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "denoise.jpg"
+            await save_step_preview(output_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/denoise"
+        except Exception:  # noqa: BLE001
+            logger.warning("denoise_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"denoised_path": str(output_path)},
+            metadata={
+                "denoised_path": str(output_path),
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message="AI noise reduction complete.",
         )

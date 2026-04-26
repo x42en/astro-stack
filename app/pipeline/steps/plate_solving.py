@@ -47,7 +47,8 @@ class PlateSolvingStep(PipelineStep):
         """
         if not config.get("plate_solving_enabled", True):
             return StepResult(
-                success=True, skipped=True, message="Plate solving disabled in profile."
+                success=True, skipped=True, message="Plate solving disabled in profile.",
+                metadata={"preview_url": f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"},
             )
 
         if context.stacked_fits_path is None:
@@ -69,6 +70,7 @@ class PlateSolvingStep(PipelineStep):
                 "plate_solving_no_solution",
                 fits=str(context.stacked_fits_path),
             )
+            result["preview_url"] = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
             return StepResult(
                 success=True,
                 metadata=result,
@@ -79,6 +81,8 @@ class PlateSolvingStep(PipelineStep):
             )
 
         logger.info("plate_solving_done", ra=result.get("ra"), dec=result.get("dec"))
+        # Plate solving does not produce a new FITS; reuse the preprocessing preview.
+        result["preview_url"] = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
         return StepResult(
             success=True,
             metadata=result,

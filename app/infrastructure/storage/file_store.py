@@ -127,6 +127,21 @@ class FileStore:
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
+    def step_preview_path(self, session_id: uuid.UUID, step_name: str) -> Path:
+        """Return the path where a per-step JPEG preview is stored.
+
+        Previews survive the work-directory cleanup because they live under
+        the ``/output/`` tree, not under ``/sessions/``.
+
+        Args:
+            session_id: Session UUID.
+            step_name: Machine-readable step identifier (e.g. ``"preprocessing"``).
+
+        Returns:
+            Path under ``/output/{session_id}/previews/{step_name}.jpg``.
+        """
+        return self.output_root / str(session_id) / "previews" / f"{step_name}.jpg"
+
     # ── Frame discovery ───────────────────────────────────────────────────────
 
     def discover_frames(
