@@ -96,6 +96,16 @@ if command -v graxpert >/dev/null 2>&1; then
     # so they survive container restarts.
     export XDG_DATA_HOME="${MODELS_DIR}"
 
+    # GraXpert needs a valid image file to proceed past file-open.
+    # Create a minimal 64x64 single-channel FITS using Python/astropy.
+    DUMMY_FITS="/tmp/graxpert_dummy.fits"
+    python3 - <<'PYEOF'
+import numpy as np
+from astropy.io import fits
+hdu = fits.PrimaryHDU(np.zeros((64, 64), dtype=np.float32))
+hdu.writeto("/tmp/graxpert_dummy.fits", overwrite=True)
+PYEOF
+
     for GRAXPERT_CMD in background-extraction denoising deconv-obj deconv-stellar; do
         echo "  Pre-downloading GraXpert model: ${GRAXPERT_CMD}..."
         # GraXpert CLI uses single-dash flags; filename is positional.
@@ -105,10 +115,11 @@ if command -v graxpert >/dev/null 2>&1; then
             -cmd "${GRAXPERT_CMD}" \
             -gpu false \
             -output "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits" \
-            /dev/null \
+            "${DUMMY_FITS}" \
             2>&1 | head -5 || true
         rm -f "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits"
     done
+    rm -f "${DUMMY_FITS}"
 
     MODEL_COUNT=$(find "${GRAXPERT_DIR}" -type f | wc -l)
     if [ "${MODEL_COUNT}" -gt 0 ]; then
