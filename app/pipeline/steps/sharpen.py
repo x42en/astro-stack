@@ -40,13 +40,20 @@ class SharpenStep(PipelineStep):
             StepResult with ``sharpened_path`` in metadata.
         """
         if not config.get("sharpen_enabled", True):
-            input_path = context.denoised_path or context.background_removed_path
+            input_path = (
+                context.denoised_path
+                or context.stretched_fits_path
+                or context.background_removed_path
+            )
             if input_path:
                 context.sharpened_path = input_path
             return StepResult(success=True, skipped=True, message="Sharpening disabled in profile.")
 
         input_path = (
-            context.denoised_path or context.background_removed_path or context.stacked_fits_path
+            context.denoised_path
+            or context.stretched_fits_path
+            or context.background_removed_path
+            or context.stacked_fits_path
         )
         if input_path is None:
             return StepResult(success=True, skipped=True, message="No input FITS for sharpening.")

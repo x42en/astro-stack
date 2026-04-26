@@ -41,12 +41,20 @@ class DenoiseStep(PipelineStep):
             StepResult with ``denoised_path`` in metadata.
         """
         if not config.get("denoise_enabled", True):
-            input_path = context.background_removed_path or context.stacked_fits_path
+            input_path = (
+                context.stretched_fits_path
+                or context.background_removed_path
+                or context.stacked_fits_path
+            )
             if input_path:
                 context.denoised_path = input_path
             return StepResult(success=True, skipped=True, message="Denoise disabled in profile.")
 
-        input_path = context.background_removed_path or context.stacked_fits_path
+        input_path = (
+            context.stretched_fits_path
+            or context.background_removed_path
+            or context.stacked_fits_path
+        )
         if input_path is None:
             return StepResult(success=True, skipped=True, message="No input FITS for denoise.")
 

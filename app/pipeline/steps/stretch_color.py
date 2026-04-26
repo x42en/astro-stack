@@ -74,7 +74,7 @@ class StretchColorStep(PipelineStep):
         commands = builder.build_postprocessing_commands()
 
         if not commands:
-            context.background_removed_path = input_path
+            context.stretched_fits_path = input_path
             return StepResult(
                 success=True, skipped=True, message="No stretch commands for this profile."
             )
@@ -99,7 +99,16 @@ class StretchColorStep(PipelineStep):
                         )
                         await self.event_bus.publish_job_event(context.job_id, ws_log)
 
+        # Siril's `save` command writes <name>.fit (without the trailing 's').
+        # Rename the output to .fits so subsequent steps can consume it correctly.
+        import os  # noqa: PLC0415
+
+        siril_out_fit = context.work_dir / "output" / "for_stretch.fit"
+        if siril_out_fit.exists():
+            os.replace(str(siril_out_fit), str(siril_input))
+
         stretched_path = context.work_dir / "output" / "for_stretch.fits"
+        context.stretched_fits_path = stretched_path
         logger.info("stretch_color_done", output=str(stretched_path))
 
         return StepResult(
