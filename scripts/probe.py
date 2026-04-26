@@ -717,78 +717,135 @@ async def check_tool_smoke_tests() -> None:
 
         # ── 4. Cosmic Clarity: all four pipeline scripts ───────────────────────
         cosmic_src = Path("/opt/cosmic-clarity")
-        models_dir = "/models"
-        # GPU device index: extract from GPU_DEVICES env (e.g. "cuda:0" → "0")
-        gpu_raw = os.environ.get("GPU_DEVICES", "cuda:0").split(",")[0].strip()
-        gpu_idx = gpu_raw.split(":")[-1] if ":" in gpu_raw else "0"
+        cc_input_dir  = cosmic_src / "input"
+        cc_output_dir = cosmic_src / "output"
+        # PyQt6 scripts (sharpen, super_res, darkstar) need an offscreen Qt
+        # platform; inherit from the container env or force the value here.
+        cc_qt_env = {"QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")}
 
-        cosmic_tests: list[tuple[str, list[str], int]] = [
-            ("denoise", [
-                sys.executable,
-                str(cosmic_src / "setiastrocosmicclarity_denoise.py"),
-                "--input",  str(dummy),
-                "--output", str(tmpdir / "cc_denoise.fits"),
-                "--denoise_strength", "0.5",
-                "--models_path", models_dir,
-                "--gpu", gpu_idx,
-            ], 180),
-            ("sharpen", [
-                sys.executable,
-                str(cosmic_src / "SetiAstroCosmicClarity.py"),
-                "--input",  str(dummy),
-                "--output", str(tmpdir / "cc_sharpen.fits"),
-                "--stellar_amount",    "0.5",
-                "--nonstellar_amount", "0.5",
-                "--radius", "2",
-                "--models_path", models_dir,
-                "--gpu", gpu_idx,
-            ], 180),
-            ("super_resolution", [
-                sys.executable,
-                str(cosmic_src / "SetiAstroCosmicClarity_SuperRes.py"),
-                "--input",  str(dummy),
-                "--output", str(tmpdir / "cc_superres.fits"),
-                "--scale", "2",
-                "--models_path", models_dir,
-                "--gpu", gpu_idx,
-            ], 300),
-            ("star_removal", [
-                sys.executable,
-                str(cosmic_src / "setiastrocosmicclarity_darkstar.py"),
-                "--input",  str(dummy),
-                "--output", str(tmpdir / "cc_starrem.fits"),
-                "--models_path", models_dir,
-                "--gpu", gpu_idx,
-            ], 180),
-        ]
-
-        for name, cmd, timeout in cosmic_tests:
-            script_path = Path(cmd[1])
-            if not script_path.exists():
-                print(_warn(f"  Cosmic smoke [{name}]: script not found — skipped"))
-                report.add(f"smoke:cosmic:{name}", Level.WARNING, "script missing")
-                continue
-
-            print(_info(f"  [Cosmic Clarity] {name}..."))
-            rc, out, err = await _run_async(cmd, timeout=timeout)
-            out_path = Path(cmd[cmd.index("--output") + 1])
-
+        async def _cc_dir_test(
+            label: str,
+            script: Path,
+            cmd: list[str],
+            expected_name: str,
+            timeout: int,
+        ) -> None:
+            """Copy dummy into cc_input_dir, run cmd, verify output in cc_output_dir."""
+            if not script.exists():
+                print(_warn(f"  Cosmic smoke [{label}]: script not found — skipped"))
+                report.add(f"smoke:cosmic:{label}", Level.WARNING, "script missing")
+                return
+            print(_info(f"  [Cosmic Clarity] {label}..."))
+            cc_input_dir.mkdir(parents=True, exist_ok=True)
+            cc_output_dir.mkdir(parents=True, exist_ok=True)
+            for f in cc_input_dir.glob("*"):
+                f.unlink(missing_ok=True)
+            for f in cc_output_dir.glob("*"):
+                f.unlink(missing_ok=True)
+            shutil.copy(dummy, cc_input_dir / dummy.name)
+            rc, out, err = await _run_async(cmd, timeout=timeout, extra_env=cc_qt_env)
+            expected = cc_output_dir / expected_name
+            for f in cc_input_dir.glob("*"):
+                f.unlink(missing_ok=True)
             if rc == -2:
-                print(_warn(f"  Cosmic smoke [{name}]: timed out after {timeout}s"))
-                report.add(f"smoke:cosmic:{name}", Level.WARNING, "timeout")
+                print(_warn(f"  Cosmic smoke [{label}]: timed out after {timeout}s"))
+                report.add(f"smoke:cosmic:{label}", Level.WARNING, "timeout")
             elif rc == -1:
-                print(_fail(f"  Cosmic smoke [{name}]: Python interpreter not found"))
-                report.add(f"smoke:cosmic:{name}", Level.CRITICAL, "python not found")
+                print(_fail(f"  Cosmic smoke [{label}]: Python interpreter not found"))
+                report.add(f"smoke:cosmic:{label}", Level.CRITICAL, "python not found")
             elif rc != 0:
                 snippet = (out + err).strip().splitlines()[-1][:80] if (out + err).strip() else ""
-                print(_warn(f"  Cosmic smoke [{name}]: exit {rc} — {snippet}"))
-                report.add(f"smoke:cosmic:{name}", Level.WARNING, f"exit {rc}")
-            elif not out_path.exists():
-                print(_warn(f"  Cosmic smoke [{name}]: exit 0 but output file not written"))
-                report.add(f"smoke:cosmic:{name}", Level.WARNING, "no output file")
+                print(_warn(f"  Cosmic smoke [{label}]: exit {rc} — {snippet}"))
+                report.add(f"smoke:cosmic:{label}", Level.WARNING, f"exit {rc}")
+            elif not expected.exists():
+                print(_warn(f"  Cosmic smoke [{label}]: exit 0 but output not found"))
+                report.add(f"smoke:cosmic:{label}", Level.WARNING, "no output file")
             else:
-                print(_ok(f"  Cosmic smoke [{name}]: OK"))
-                report.add(f"smoke:cosmic:{name}", Level.OK)
+                print(_ok(f"  Cosmic smoke [{label}]: OK"))
+                report.add(f"smoke:cosmic:{label}", Level.OK)
+            for f in cc_output_dir.glob("*"):
+                f.unlink(missing_ok=True)
+
+        # 4a. Denoise — uses tkinter for GUI; CLI is fully headless
+        await _cc_dir_test(
+            "denoise",
+            cosmic_src / "setiastrocosmicclarity_denoise.py",
+            [
+                sys.executable,
+                str(cosmic_src / "setiastrocosmicclarity_denoise.py"),
+                "--denoise_strength", "0.5",
+                "--denoise_mode", "luminance",
+                "--disable_gpu",
+            ],
+            f"{dummy.stem}_denoised{dummy.suffix}",
+            180,
+        )
+
+        # 4b. Sharpen — imports PyQt6 unconditionally; QT_QPA_PLATFORM=offscreen required
+        await _cc_dir_test(
+            "sharpen",
+            cosmic_src / "SetiAstroCosmicClarity.py",
+            [
+                sys.executable,
+                str(cosmic_src / "SetiAstroCosmicClarity.py"),
+                "--sharpening_mode", "Both",
+                "--stellar_amount", "0.5",
+                "--nonstellar_amount", "0.5",
+                "--disable_gpu",
+            ],
+            f"{dummy.stem}_sharpened{dummy.suffix}",
+            180,
+        )
+
+        # 4c. Super-resolution — accepts --input/--output_dir/--scale/--model_dir;
+        #     output is always written as {stem}_upscaled{scale}x.fit in output_dir
+        sr_script = cosmic_src / "SetiAstroCosmicClarity_SuperRes.py"
+        if not sr_script.exists():
+            print(_warn("  Cosmic smoke [super_resolution]: script not found — skipped"))
+            report.add("smoke:cosmic:super_resolution", Level.WARNING, "script missing")
+        else:
+            print(_info("  [Cosmic Clarity] super_resolution..."))
+            rc, out, err = await _run_async(
+                [
+                    sys.executable, str(sr_script),
+                    "--input",      str(dummy),
+                    "--output_dir", str(tmpdir),
+                    "--scale",      "2",
+                    "--model_dir",  str(cosmic_src),
+                ],
+                timeout=300,
+                extra_env=cc_qt_env,
+            )
+            sr_expected = tmpdir / f"{dummy.stem}_upscaled2x.fit"
+            if rc == -2:
+                print(_warn("  Cosmic smoke [super_resolution]: timed out after 300s"))
+                report.add("smoke:cosmic:super_resolution", Level.WARNING, "timeout")
+            elif rc == -1:
+                print(_fail("  Cosmic smoke [super_resolution]: Python interpreter not found"))
+                report.add("smoke:cosmic:super_resolution", Level.CRITICAL, "python not found")
+            elif rc != 0:
+                snippet = (out + err).strip().splitlines()[-1][:80] if (out + err).strip() else ""
+                print(_warn(f"  Cosmic smoke [super_resolution]: exit {rc} — {snippet}"))
+                report.add("smoke:cosmic:super_resolution", Level.WARNING, f"exit {rc}")
+            elif not sr_expected.exists():
+                print(_warn("  Cosmic smoke [super_resolution]: exit 0 but output not found"))
+                report.add("smoke:cosmic:super_resolution", Level.WARNING, "no output file")
+            else:
+                print(_ok("  Cosmic smoke [super_resolution]: OK"))
+                report.add("smoke:cosmic:super_resolution", Level.OK)
+
+        # 4d. Star removal — imports PyQt6; dir-based I/O like denoise/sharpen
+        await _cc_dir_test(
+            "star_removal",
+            cosmic_src / "setiastrocosmicclarity_darkstar.py",
+            [
+                sys.executable,
+                str(cosmic_src / "setiastrocosmicclarity_darkstar.py"),
+                "--disable_gpu",
+            ],
+            f"{dummy.stem}_starless{dummy.suffix}",
+            180,
+        )
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

@@ -115,6 +115,10 @@ RUN git clone --depth=1 https://github.com/setiastro/cosmicclarity.git \
 RUN test -f /opt/cosmic-clarity/requirements.txt \
     && pip install -r /opt/cosmic-clarity/requirements.txt \
     || true
+# sharpen, super-resolution and darkstar scripts import PyQt6 unconditionally
+# at the top of their module — even headless CLI invocations need the package.
+# QT_QPA_PLATFORM=offscreen (set below) lets Qt run without a real display.
+RUN pip install PyQt6 || true
 
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models
@@ -138,7 +142,8 @@ RUN useradd -m -s /bin/bash astro \
     && chown -R astro:astro /inbox /sessions /output /models
 
 # venv is already present (FROM ai-tools), just set PATH
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PATH="/opt/venv/bin:$PATH" \
+    QT_QPA_PLATFORM=offscreen
 # Note: PYTHONPATH must NOT be set to /app here — it would shadow the installed
 # alembic package with /app/alembic/ (our migrations dir) causing ImportError.
 # The editable install (pip install -e .) creates a .pth file in site-packages
