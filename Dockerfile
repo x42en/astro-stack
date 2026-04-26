@@ -118,7 +118,33 @@ RUN test -f /opt/cosmic-clarity/requirements.txt \
 # sharpen, super-resolution and darkstar scripts import PyQt6 unconditionally
 # at the top of their module — even headless CLI invocations need the package.
 # QT_QPA_PLATFORM=offscreen (set below) lets Qt run without a real display.
-RUN pip install PyQt6 || true
+# sep (Source Extractor Python) is used by SetiAstroCosmicClarity.py for PSF
+# auto-detection; it must be installed alongside PyQt6.
+RUN pip install PyQt6 sep || true
+
+# Download new Cosmic Clarity model weights (not committed to the git repo).
+# Scripts load models from exe_dir = /opt/cosmic-clarity/ at runtime.
+# Each download is individually fault-tolerant; a network failure at build time
+# only produces a warning — init-models.sh can retry at first run.
+RUN CC_RELEASE="https://github.com/setiastro/cosmicclarity/releases/download/Linux"; \
+    for model in \
+        deep_denoise_cnn_AI3_6.pth \
+        deep_sharp_stellar_cnn_AI3_5s.pth \
+        deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth \
+        deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth \
+        deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth \
+        deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth \
+        superres_2x.pth \
+        superres_3x.pth \
+        superres_4x.pth \
+        darkstar_v2.1.pth \
+        darkstar_v2.1c.pth; do \
+        target="/opt/cosmic-clarity/${model}"; \
+        [ -f "${target}" ] && continue; \
+        wget -q --tries=3 --timeout=120 \
+            "${CC_RELEASE}/${model}" -O "${target}" \
+        || { echo "WARNING: download failed for ${model}"; rm -f "${target}"; }; \
+    done
 
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models

@@ -28,56 +28,54 @@ echo "Models directory: ${MODELS_DIR}"
 echo ""
 echo "--- Cosmic Clarity models ---"
 
-# Models are co-located in the Cosmic Clarity source repo
-# Copy from the cloned source if available, else download from GitHub releases
-if [ -d "${COSMIC_SRC}" ]; then
-    echo "Copying models from Cosmic Clarity source at ${COSMIC_SRC}..."
-    for model_file in \
-        "denoise_cnn.pth" \
-        "deep_denoise_cnn.pth" \
-        "deep_sharp_stellar_cnn.pth" \
-        "deep_nonstellar_sharp_cnn_radius_1.pth" \
-        "deep_nonstellar_sharp_cnn_radius_2.pth" \
-        "deep_nonstellar_sharp_cnn_radius_4.pth" \
-        "deep_nonstellar_sharp_cnn_radius_8.pth" \
-        "satelliteremoval128featuremaps.pth" \
-        "nonstellar_sharp_cnn_radius_1.pth" \
-        "nonstellar_sharp_cnn_radius_2.pth" \
-        "nonstellar_sharp_cnn_radius_4.pth" \
-        "nonstellar_sharp_cnn_radius_8.pth" \
-        "sharp_cnn_radius_1.pth"; do
-        src="${COSMIC_SRC}/${model_file}"
-        dst="${COSMIC_DIR}/${model_file}"
-        if [ -f "${src}" ] && [ ! -f "${dst}" ]; then
-            cp "${src}" "${dst}"
-            echo "  Copied: ${model_file}"
-        elif [ -f "${dst}" ]; then
-            echo "  Already present: ${model_file}"
-        else
-            echo "  WARNING: ${model_file} not found in source"
-        fi
-    done
-else
-    echo "Cosmic Clarity source not found at ${COSMIC_SRC}."
-    echo "Downloading from GitHub releases..."
-    COSMIC_RELEASE_URL="https://github.com/setiastro/cosmicclarity/raw/main"
+# Cosmic Clarity scripts load models from their own directory (exe_dir =
+# /opt/cosmic-clarity/).  The Dockerfile downloads them at build time, but
+# this section serves as a runtime fallback in case the build was done
+# without network access (e.g. air-gapped CI).
+#
+# New model names (current scripts, AI3.x series):
+#   denoise       → deep_denoise_cnn_AI3_6.pth
+#   sharpen       → deep_sharp_stellar_cnn_AI3_5s.pth
+#                   deep_nonstellar_sharp_cnn_radius_{1,2,4,8}AI3_5s.pth
+#   super-res     → superres_{2,3,4}x.pth
+#   darkstar      → darkstar_v2.1.pth  darkstar_v2.1c.pth
 
+CC_RELEASE="https://github.com/setiastro/cosmicclarity/releases/download/Linux"
+
+if [ -d "${COSMIC_SRC}" ]; then
+    MISSING=0
     for model_file in \
-        "denoise_cnn.pth" \
-        "deep_denoise_cnn.pth" \
-        "deep_sharp_stellar_cnn.pth" \
-        "deep_nonstellar_sharp_cnn_radius_1.pth" \
-        "deep_nonstellar_sharp_cnn_radius_2.pth" \
-        "deep_nonstellar_sharp_cnn_radius_4.pth"; do
-        dst="${COSMIC_DIR}/${model_file}"
-        if [ ! -f "${dst}" ]; then
-            echo "  Downloading: ${model_file}..."
-            wget -q "${COSMIC_RELEASE_URL}/${model_file}" -O "${dst}" \
-                || echo "  WARNING: Failed to download ${model_file}"
+        "deep_denoise_cnn_AI3_6.pth" \
+        "deep_sharp_stellar_cnn_AI3_5s.pth" \
+        "deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth" \
+        "deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth" \
+        "deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth" \
+        "deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth" \
+        "superres_2x.pth" \
+        "superres_3x.pth" \
+        "superres_4x.pth" \
+        "darkstar_v2.1.pth" \
+        "darkstar_v2.1c.pth"; do
+        target="${COSMIC_SRC}/${model_file}"
+        if [ -f "${target}" ]; then
+            echo "  OK: ${model_file}"
         else
-            echo "  Already present: ${model_file}"
+            echo "  Downloading missing model: ${model_file}..."
+            wget --tries=3 --timeout=120 -q \
+                "${CC_RELEASE}/${model_file}" -O "${target}" \
+            && echo "  Downloaded: ${model_file}" \
+            || { echo "  WARNING: download failed for ${model_file}"; rm -f "${target}"; MISSING=$((MISSING+1)); }
         fi
     done
+    if [ "${MISSING}" -eq 0 ]; then
+        echo "  All Cosmic Clarity models present in ${COSMIC_SRC}"
+    else
+        echo "  WARNING: ${MISSING} model(s) could not be downloaded — check network access."
+    fi
+else
+    echo "  WARNING: Cosmic Clarity source not found at ${COSMIC_SRC}."
+    echo "  Models are loaded from that directory at runtime; ensure the image"
+    echo "  was built with network access so the Dockerfile download step ran."
 fi
 
 # ── GraXpert AI model ─────────────────────────────────────────────────────────
