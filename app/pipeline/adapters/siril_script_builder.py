@@ -183,7 +183,11 @@ class SirilScriptBuilder:
         # output files — call seqapplyreg to materialise the aligned sequence.
         commands.append("register pp_light -2pass")
         # Phase 2: apply transforms → creates the r_pp_light sequence on disk.
-        commands.append("seqapplyreg pp_light -framing=cog -interp=lanczos4 -filter-fwhm=2k")
+        # Use percentage-based FWHM filtering (keep best 80%) rather than
+        # k-sigma so the command stays robust regardless of session length:
+        # with many frames the FWHM σ grows, making 2k reject too many frames.
+        # The stacking step already applies -weight=wfwhm for quality weighting.
+        commands.append("seqapplyreg pp_light -framing=cog -interp=lanczos4 -filter-fwhm=80%")
 
         # Stacking
         commands.append(self._stack_command())

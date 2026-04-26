@@ -200,7 +200,7 @@ class PipelineOrchestrator:
             job_id=self.job_id,
             session_id=self.session_id,
             duration_seconds=duration,
-            outputs=final_outputs,
+            outputs={k: v for k, v in final_outputs.items() if isinstance(v, str)},
         )
         await self.event_bus.publish_job_event(self.job_id, completed_event)
         logger.info("pipeline_completed", job_id=str(self.job_id), duration=duration)
