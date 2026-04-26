@@ -57,18 +57,25 @@ RUN command -v siril-cli || \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
-# ASTAP tar.gz is flat (files at root, no subdirectory) — do NOT use
-# --strip-components=1 or all files are silently skipped.
-# chmod 755 is explicit about granting world-execute; +x only adds to
-# whatever bits are already set by tar.
-RUN mkdir -p /opt/astap \
-    && wget -q --content-disposition \
-        "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
-        -O /opt/astap/astap.tar.gz \
-    && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap \
-    && rm /opt/astap/astap.tar.gz \
-    && chmod 755 /opt/astap/astap \
-    && ln -sf /opt/astap/astap /usr/local/bin/astap
+# ASTAP plate solver — install via .deb package (Ubuntu/Debian native, no
+# tar layout guessing needed). dpkg places the binary at /usr/bin/astap.
+# Fallback: if the .deb fails, extract from the tar.gz and use `find` to
+# locate the binary regardless of the internal directory structure.
+RUN curl -fsSL \
+        "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.deb/download" \
+        -o /tmp/astap.deb \
+    && dpkg -i /tmp/astap.deb \
+    && rm /tmp/astap.deb \
+    || ( \
+        mkdir -p /opt/astap \
+        && curl -fsSL \
+            "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
+            -o /opt/astap/astap.tar.gz \
+        && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap \
+        && rm /opt/astap/astap.tar.gz \
+        && find /opt/astap -maxdepth 3 -name 'astap' -type f -exec chmod 755 {} + \
+        && ln -sf "$(find /opt/astap -maxdepth 3 -name 'astap' -type f | head -1)" /usr/local/bin/astap \
+    )
 
 # ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps
