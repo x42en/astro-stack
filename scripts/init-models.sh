@@ -87,13 +87,34 @@ echo "--- GraXpert AI model ---"
 GRAXPERT_DIR="${MODELS_DIR}/graxpert"
 mkdir -p "${GRAXPERT_DIR}"
 
-# GraXpert headless CLI automatically downloads AI models on first run
-# We just need to ensure graxpert is installed, models will be downloaded
-# when the pipeline runs (or we can trigger a dummy run to pre-download)
-
-echo "  GraXpert AI models are downloaded automatically on first use."
-echo "  Models will be downloaded from MinIO S3 when pipeline runs."
-echo "  To pre-download now, run: graxpert --help (from inside container)"
+# GraXpert downloads its background-removal AI model on first use.
+# Pre-download it now by invoking graxpert with a dummy background removal
+# call on /dev/null — it will fail on the file but will have fetched the
+# model weights beforehand.  The --output-dir flag keeps temp files tidy.
+if command -v graxpert >/dev/null 2>&1; then
+    echo "  Pre-downloading GraXpert background-extraction model..."
+    # graxpert stores models under XDG_DATA_HOME or ~/.local/share/graxpert
+    # Redirect to our volume so they survive container restarts.
+    export XDG_DATA_HOME="${MODELS_DIR}"
+    graxpert \
+        --cli \
+        background_extraction \
+        --input /dev/null \
+        --output "${GRAXPERT_DIR}/dummy_out.fits" \
+        2>&1 | head -20 || true
+    # Remove dummy output if it was created
+    rm -f "${GRAXPERT_DIR}/dummy_out.fits"
+    # Report what landed in the model dir
+    MODEL_COUNT=$(find "${GRAXPERT_DIR}" -type f | wc -l)
+    if [ "${MODEL_COUNT}" -gt 0 ]; then
+        echo "  GraXpert models ready: ${MODEL_COUNT} file(s) in ${GRAXPERT_DIR}"
+    else
+        echo "  WARNING: GraXpert model download produced no files (network issue?)."
+        echo "  Pipeline will attempt to download on first use."
+    fi
+else
+    echo "  WARNING: graxpert CLI not found — skipping model pre-download."
+fi
 
 # ── ASTAP star catalogue ──────────────────────────────────────────────────────
 echo ""
@@ -101,32 +122,50 @@ echo "--- ASTAP star catalogue ---"
 ASTAP_DB_DIR="${ASTAP_STAR_DB_PATH:-/opt/astap/stars}"
 mkdir -p "${ASTAP_DB_DIR}"
 
-# D50 catalogue (~500MB) — covers most deep sky objects
-# Download from SourceForge (new .pkg.tar.zst format)
+# D50 catalogue (~900MB) — covers most deep-sky objects to mag 17
+# The .pkg.tar.zst is an Arch Linux package; the actual catalogue file
+# lives at usr/share/astap/ inside the archive, NOT at the top level.
+# We must extract to a temp dir and then find + copy the catalogue files.
+
+# Remove any stale archive that a previous failed run may have left here
+rm -f "${ASTAP_DB_DIR}"/*.tar.zst "${ASTAP_DB_DIR}"/*.deb 2>/dev/null || true
+
 ASTAP_DB_FILE="${ASTAP_DB_DIR}/d50.1476"
 if [ ! -f "${ASTAP_DB_FILE}" ]; then
-    echo "  Downloading ASTAP D50 star catalogue (~500MB)..."
-    # Try the newest zstd-compressed package first (direct URL without /download)
-    ASTAP_URL="https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg.tar.zst/download"
-    wget -L "${ASTAP_URL}" -O /tmp/d50.tar.zst 2>&1 || {
-        # Fallback to .deb format
-        echo "  Trying older .deb format..."
-        DEB_URL="https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.deb/download"
-        wget -L "${DEB_URL}" -O /tmp/d50.deb 2>&1 \
-            && dpkg -x /tmp/d50.deb /tmp/d50_extract \
-            && mv /tmp/d50_extract/usr/share/astap/star_database/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-            || mv /tmp/d50_extract/usr/share/astap/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-            && rm -rf /tmp/d50.deb /tmp/d50_extract \
-            && echo "  ASTAP D50 catalogue installed." \
-        || echo "  WARNING: ASTAP D50 download failed — plate solving will not work."
-    }
-    # Check if zst extraction worked
+    echo "  Downloading ASTAP D50 star catalogue (~900MB)..."
+
+    # Primary: direct CDN URL (no redirect page, more reliable than /download)
+    ASTAP_ZST_URL="https://downloads.sourceforge.net/project/astap-program/star_databases/d50_star_database.pkg.tar.zst"
+    wget --tries=3 --waitretry=15 --timeout=300 -q --show-progress \
+        "${ASTAP_ZST_URL}" -O /tmp/d50.tar.zst \
+    || wget --tries=2 --waitretry=15 --timeout=300 -q --show-progress \
+        "https://sourceforge.net/projects/astap-program/files/star_databases/d50_star_database.pkg.tar.zst/download" \
+        -O /tmp/d50.tar.zst \
+    || { echo "  WARNING: ASTAP D50 download failed — plate solving will not work."; rm -f /tmp/d50.tar.zst; }
+
     if [ -f "/tmp/d50.tar.zst" ]; then
-        tar -I zstd -xf /tmp/d50.tar.zst -C /tmp 2>&1 \
-            && mv /tmp/d50* "${ASTAP_DB_DIR}/" 2>/dev/null \
-            && rm -rf /tmp/d50.tar.zst \
-            && echo "  ASTAP D50 catalogue installed." \
-        || echo "  WARNING: ASTAP D50 extraction failed — plate solving will not work."
+        echo "  Extracting D50 catalogue..."
+        mkdir -p /tmp/d50_extract
+        if tar -I zstd -xf /tmp/d50.tar.zst -C /tmp/d50_extract 2>&1; then
+            # The .pkg.tar.zst lays files out as: usr/share/astap/d50.1476
+            # Use find to locate all catalogue files regardless of sub-path.
+            FOUND=0
+            while IFS= read -r -d '' f; do
+                cp "$f" "${ASTAP_DB_DIR}/"
+                echo "  Installed: $(basename "$f")"
+                FOUND=$((FOUND + 1))
+            done < <(find /tmp/d50_extract -type f \( -name "d50*" -o -name "*.1476" -o -name "*.290" -o -name "*.bin" \) -print0)
+            if [ "${FOUND}" -gt 0 ]; then
+                echo "  ASTAP D50 catalogue installed (${FOUND} file(s))."
+            else
+                echo "  WARNING: tar extracted but no catalogue files found — archive layout may have changed."
+                echo "  Archive contents (first 20 lines):"
+                tar -I zstd -tf /tmp/d50.tar.zst 2>/dev/null | head -20 || true
+            fi
+        else
+            echo "  WARNING: ASTAP D50 extraction failed — plate solving will not work."
+        fi
+        rm -rf /tmp/d50.tar.zst /tmp/d50_extract
     fi
 else
     echo "  Already present: ASTAP D50 catalogue"
