@@ -285,6 +285,21 @@ class SirilAdapter:
                     if event.status_verb == "error":
                         # Collect all preceding log messages for context
                         log_context = [e.message for e in collected if e.event_type == SirilEventType.LOG]
+                        # Disk-full is a permanent failure — retrying cannot free space.
+                        # Detect it before raising so the orchestrator stops immediately
+                        # instead of burning all retry attempts.
+                        is_disk_full = any(
+                            "not enough free disk space" in msg.lower()
+                            for msg in log_context
+                        )
+                        if is_disk_full:
+                            raise PipelineStepException(
+                                ErrorCode.PIPE_DISK_FULL,
+                                f"Siril aborted: not enough disk space for '{command}'.",
+                                step_name=cmd_name,
+                                retryable=False,
+                                details={"command": command, "siril_log": log_context},
+                            )
                         raise PipelineStepException(
                             ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
                             f"Siril command '{command}' failed: {event.message}",

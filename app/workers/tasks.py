@@ -25,6 +25,7 @@ from app.domain.job import JobStatus
 from app.domain.profile import ProcessingProfileConfig
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository
+from app.infrastructure.storage.file_store import FileStore
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,7 @@ async def run_pipeline(
     )
 
     event_bus: EventBus = ctx["event_bus"]
+    file_store = FileStore()
 
     async for db_session in get_async_session():
         try:
@@ -85,6 +87,7 @@ async def run_pipeline(
             )
             outputs = await orchestrator.run()
             logger.info("pipeline_task_completed", job_id=job_id_str, outputs=list(outputs.keys()))
+            await file_store.cleanup_work_dir(session_id)
             return outputs
 
         except AstroStackException as exc:
@@ -95,11 +98,16 @@ async def run_pipeline(
                 message=exc.message,
             )
             if exc.retryable:
+                # Do NOT clean up: the orchestrator resumes from already-succeeded
+                # steps (e.g. raw_conversion), so converted FITS in work_dir must
+                # be preserved across the ARQ-level retry.
                 raise Retry(defer=30) from exc
+            await file_store.cleanup_work_dir(session_id)
             return {"error": exc.message, "error_code": exc.error_code.value}
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("pipeline_task_unexpected_error", job_id=job_id_str)
+            await file_store.cleanup_work_dir(session_id)
             return {"error": str(exc), "error_code": "SYS_INTERNAL_ERROR"}
 
 
