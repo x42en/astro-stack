@@ -81,7 +81,7 @@ class PreprocessingStep(PipelineStep):
         commands = builder.build_preprocessing_commands()
 
         total_commands = len(commands)
-        stacked_path = context.work_dir / "process" / "stack_result.fits"
+        stacked_path = context.work_dir / "process" / "stack_result.fit"
 
         async with SirilAdapter(
             work_dir=context.work_dir,
