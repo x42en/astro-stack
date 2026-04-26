@@ -87,24 +87,29 @@ echo "--- GraXpert AI model ---"
 GRAXPERT_DIR="${MODELS_DIR}/graxpert"
 mkdir -p "${GRAXPERT_DIR}"
 
-# GraXpert downloads its background-removal AI model on first use.
-# Pre-download it now by invoking graxpert with a dummy background removal
-# call on /dev/null — it will fail on the file but will have fetched the
-# model weights beforehand.  The --output-dir flag keeps temp files tidy.
+# GraXpert downloads its AI models on first use.
+# Pre-download all four models now so they are available without network
+# access at job runtime.  We invoke graxpert with /dev/null as input — it
+# fetches the model first, then fails on the invalid file (which is fine).
 if command -v graxpert >/dev/null 2>&1; then
-    echo "  Pre-downloading GraXpert background-extraction model..."
-    # graxpert stores models under XDG_DATA_HOME or ~/.local/share/graxpert
-    # Redirect to our volume so they survive container restarts.
+    # graxpert stores models under XDG_DATA_HOME; redirect to our volume
+    # so they survive container restarts.
     export XDG_DATA_HOME="${MODELS_DIR}"
-    graxpert \
-        --cli \
-        background_extraction \
-        --input /dev/null \
-        --output "${GRAXPERT_DIR}/dummy_out.fits" \
-        2>&1 | head -20 || true
-    # Remove dummy output if it was created
-    rm -f "${GRAXPERT_DIR}/dummy_out.fits"
-    # Report what landed in the model dir
+
+    for GRAXPERT_CMD in background-extraction denoising deconv-obj deconv-stellar; do
+        echo "  Pre-downloading GraXpert model: ${GRAXPERT_CMD}..."
+        # GraXpert CLI uses single-dash flags; filename is positional.
+        # -gpu false: model download doesn't need GPU.
+        graxpert \
+            -cli \
+            -cmd "${GRAXPERT_CMD}" \
+            -gpu false \
+            -output "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits" \
+            /dev/null \
+            2>&1 | head -5 || true
+        rm -f "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits"
+    done
+
     MODEL_COUNT=$(find "${GRAXPERT_DIR}" -type f | wc -l)
     if [ "${MODEL_COUNT}" -gt 0 ]; then
         echo "  GraXpert models ready: ${MODEL_COUNT} file(s) in ${GRAXPERT_DIR}"

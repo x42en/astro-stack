@@ -52,7 +52,6 @@ class GraXpertAdapter:
         self.source_path = Path(source_path or settings.graxpert_source_path)
         self.models_path = Path(models_path or settings.models_path) / "graxpert"
         self.gpu_device = gpu_device
-        self._device_index = gpu_device.split(":")[-1] if ":" in gpu_device else "0"
 
     async def remove_background(
         self,
@@ -132,6 +131,16 @@ class GraXpertAdapter:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _gpu_flag(self) -> str:
+        """Return ``'true'`` when a CUDA device is configured, ``'false'`` otherwise.
+
+        GraXpert's ``-gpu`` flag accepts the string literals ``true`` / ``false``
+        (not a device index).  We enable GPU whenever ``gpu_device`` starts with
+        ``'cuda'``; the runtime will use the first visible CUDA device as
+        determined by ``CUDA_VISIBLE_DEVICES`` or driver defaults.
+        """
+        return "true" if self.gpu_device.startswith("cuda") else "false"
+
     def _build_command_script(
         self,
         script: Path,
@@ -147,27 +156,23 @@ class GraXpertAdapter:
             input_path: Input FITS path.
             output_path: Output FITS path.
             method: Extraction method (``ai`` or ``polynomial``).
-            ai_model: AI model identifier.
+            ai_model: AI model version string.
 
         Returns:
             Command token list.
         """
+        # GraXpert CLI flags use single-dash; filename is positional.
         cmd = [
             sys.executable,
             str(script),
-            "--cli",
-            "--input",
-            str(input_path),
-            "--output",
-            str(output_path),
-            "--gpu",
-            self._device_index,
+            "-cli",
+            "-cmd", "background-extraction",
+            "-output", str(output_path),
+            "-gpu", self._gpu_flag(),
         ]
         if method == "ai":
-            cmd += ["--ai_model", ai_model, "--models_dir", str(self.models_path)]
-        else:
-            cmd += ["--background_model", "Polynomial"]
-        return cmd
+            cmd += ["-ai_version", ai_model]
+        return cmd + [str(input_path)]
 
     def _build_command_installed(
         self,
@@ -182,23 +187,19 @@ class GraXpertAdapter:
             input_path: Input FITS path.
             output_path: Output FITS path.
             method: Extraction method.
-            ai_model: AI model identifier.
+            ai_model: AI model version string.
 
         Returns:
             Command token list.
         """
+        # GraXpert CLI flags use single-dash; filename is positional.
         cmd = [
             "graxpert",
-            "--cli",
-            "--input",
-            str(input_path),
-            "--output",
-            str(output_path),
-            "--gpu",
-            self._device_index,
+            "-cli",
+            "-cmd", "background-extraction",
+            "-output", str(output_path),
+            "-gpu", self._gpu_flag(),
         ]
         if method == "ai":
-            cmd += ["--ai_model", ai_model, "--models_dir", str(self.models_path)]
-        else:
-            cmd += ["--background_model", "Polynomial"]
-        return cmd
+            cmd += ["-ai_version", ai_model]
+        return cmd + [str(input_path)]
