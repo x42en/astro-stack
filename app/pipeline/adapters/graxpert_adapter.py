@@ -166,13 +166,10 @@ class GraXpertAdapter:
         cmd = [
             sys.executable,
             str(script),
-            "-cli",
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
         ]
-        if method == "ai":
-            cmd += ["-ai_version", ai_model]
         return cmd + [str(input_path)]
 
     def _build_command_installed(
@@ -196,11 +193,8 @@ class GraXpertAdapter:
         # GraXpert CLI flags use single-dash; filename is positional.
         cmd = [
             "graxpert",
-            "-cli",
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
         ]
-        if method == "ai":
-            cmd += ["-ai_version", ai_model]
         return cmd + [str(input_path)]
