@@ -62,11 +62,12 @@ FROM siril-build AS astap-install
 # libgtk2.0-0 (→ libgdk-x11-2.0 / libgtk-x11-2.0) is NOT listed in the
 # .deb Depends but is required at runtime by the ASTAP binary; install it
 # explicitly before the package so the linker finds it.
+# Use wget with retries — curl + SourceForge redirect CDN can return 504.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgtk2.0-0 \
-    && curl -fsSL \
-        "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.deb/download" \
-        -o /tmp/astap.deb \
+    && wget --tries=5 --waitretry=15 --timeout=120 -q \
+        "https://downloads.sourceforge.net/project/astap-program/linux_installer/astap_amd64.deb" \
+        -O /tmp/astap.deb \
     && apt-get install -y --no-install-recommends /tmp/astap.deb \
     && rm /tmp/astap.deb \
     && rm -rf /var/lib/apt/lists/*
