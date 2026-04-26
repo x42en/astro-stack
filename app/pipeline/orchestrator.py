@@ -48,6 +48,57 @@ from app.pipeline.retry import RetryPolicy
 
 logger = get_logger(__name__)
 
+
+def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
+    """Render a processed FITS image to a JPEG preview (sync, run in thread).
+
+    Applies percentile stretching to map float32 data to 8-bit display range.
+    Handles both monochrome (H×W) and colour (C×H×W or H×W×C) FITS layouts.
+
+    Args:
+        fits_path: Source FITS file produced by a pipeline step.
+        output_path: Destination JPEG path (parent directory is created if needed).
+    """
+    import io as _io  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    import numpy as np  # noqa: PLC0415
+    from astropy.io import fits as _fits  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    output_path = _Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with _fits.open(str(fits_path)) as hdul:
+        data: np.ndarray | None = None
+        for hdu in hdul:
+            if hdu.data is not None and hdu.data.ndim >= 2:
+                data = np.array(hdu.data, dtype=np.float32)
+                break
+
+    if data is None:
+        logger.warning("fits_preview_no_data", path=str(fits_path))
+        return
+
+    # Normalise axis order: ensure (H, W) or (H, W, C)
+    if data.ndim == 3:
+        if data.shape[0] <= 4:
+            # (C, H, W) → (H, W, C)
+            data = np.moveaxis(data, 0, -1)
+        if data.shape[2] == 1:
+            data = data[:, :, 0]
+
+    lo, hi = np.percentile(data, [1.0, 99.5])
+    data = np.clip((data - lo) / max(float(hi - lo), 1e-6), 0.0, 1.0)
+
+    arr_8 = (data * 255).astype(np.uint8)
+    img = Image.fromarray(arr_8, mode="L").convert("RGB") if arr_8.ndim == 2 else Image.fromarray(arr_8)
+    img.thumbnail((900, 900), Image.LANCZOS)
+
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    output_path.write_bytes(buf.getvalue())
+
 # Ordered pipeline step plan — (machine_name, display_name).
 # Used by the API to return all planned steps (including pending ones) in the
 # job response so the frontend can show the full checklist from the start.
@@ -114,6 +165,58 @@ class PipelineOrchestrator:
         self._step_repo = JobStepRepository(db_session)
         self._session_repo = SessionRepository(db_session)
         self._file_store = FileStore()
+
+    # ── Step preview generation ───────────────────────────────────────────────
+
+    # Steps that produce a FITS output worth previewing, mapped to the context
+    # attribute that holds the output path.
+    _PREVIEW_STEPS: dict[str, str] = {
+        "preprocessing": "stacked_fits_path",
+        "gradient_removal": "background_removed_path",
+        "stretch_color": "stretched_fits_path",
+        "denoise": "denoised_path",
+        "sharpen": "sharpened_path",
+        "super_resolution": "superres_path",
+    }
+
+    async def _maybe_generate_step_preview(
+        self, step_name: str, context: PipelineContext
+    ) -> bool:
+        """Generate a JPEG step preview if the step produced a FITS output.
+
+        Runs the rendering in a background thread so it does not block the
+        event loop. The result is cached as a JPEG under the output directory.
+
+        Args:
+            step_name: Machine name of the completed step.
+            context: Current pipeline context containing output paths.
+
+        Returns:
+            ``True`` if a preview was generated successfully, ``False`` otherwise.
+        """
+        import asyncio  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        attr = self._PREVIEW_STEPS.get(step_name)
+        if attr is None:
+            return False
+
+        fits_path: Path | None = getattr(context, attr, None)
+        if fits_path is None or not fits_path.exists():
+            return False
+
+        preview_path = self._file_store.step_preview_path(self.session_id, step_name)
+        try:
+            await asyncio.to_thread(_fits_to_preview_jpeg, fits_path, preview_path)
+            logger.info(
+                "step_preview_generated",
+                step=step_name,
+                preview=str(preview_path),
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            logger.warning("step_preview_failed", step=step_name, exc_info=True)
+            return False
 
     async def run(self) -> dict[str, Any]:
         """Execute all pipeline steps in sequence, with retry and resume support.
@@ -306,6 +409,17 @@ class PipelineOrchestrator:
                 final_status = (
                     StepStatusValue.SKIPPED if result.skipped else StepStatusValue.SUCCESS
                 )
+
+                # For steps that produce a FITS output, generate a JPEG preview
+                # in a background thread so the client can show incremental renders.
+                has_preview = False
+                if not result.skipped:
+                    has_preview = await self._maybe_generate_step_preview(step.name, context)
+
+                step_result_payload: dict[str, Any] = dict(result.metadata)
+                if has_preview:
+                    step_result_payload["has_preview"] = True
+
                 await self.event_bus.publish_job_event(
                     self.job_id,
                     StepStatusEvent(
@@ -314,7 +428,7 @@ class PipelineOrchestrator:
                         step=step.name,
                         step_index=step_index,
                         status=final_status,
-                        result=result.metadata,
+                        result=step_result_payload,
                     ),
                 )
 
