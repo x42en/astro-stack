@@ -59,7 +59,7 @@ class ProcessingProfileConfig(SQLModel):
     """
 
     # ── Stacking ──────────────────────────────────────────────────────────────
-    rejection_algorithm: str = "sigma"  # sigma|winsorized|linear|none
+    rejection_algorithm: str = "winsorized"  # sigma|winsorized|linear|none
     rejection_low: float = 3.0
     rejection_high: float = 3.0
     normalization: str = "addscale"  # addscale|mulscale|none
@@ -80,7 +80,7 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Stretch & colour ──────────────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear
-    stretch_strength: float = 0.002
+    stretch_strength: float = 100.0
     color_calibration_enabled: bool = True
 
     # ── Denoise ───────────────────────────────────────────────────────────────

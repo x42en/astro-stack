@@ -88,13 +88,18 @@ class SirilScriptBuilder:
     def build_postprocessing_commands(self) -> list[str]:
         """Build the post-stacking Siril command sequence (stretch + colour).
 
+        The image ``for_stretch.fits`` must exist in the Siril working directory.
+        It is loaded, processed in-place, then saved back and closed.
+
         Returns:
             Ordered list of Siril command strings.
         """
-        commands: list[str] = []
+        commands: list[str] = ["load for_stretch"]
         commands.extend(self._stretch_commands())
         if self.config.color_calibration_enabled:
             commands.extend(self._color_commands())
+        commands.append("save for_stretch")
+        commands.append("close")
         return commands
 
     # ── Private command builders ──────────────────────────────────────────────
@@ -105,13 +110,12 @@ class SirilScriptBuilder:
         Returns:
             List of Siril command strings for bias stacking.
         """
-        rej_low = self.config.rejection_low
-        rej_high = self.config.rejection_high
+        rej_clause = self._rej_clause()
         return [
             "cd bias",
             "convert bias -out=../process",
             "cd ../process",
-            f"stack bias rej {rej_low} {rej_high} -nonorm -out=master-bias",
+            f"stack bias {rej_clause} -nonorm -out=master-bias",
             "cd ..",
         ]
 
@@ -124,14 +128,13 @@ class SirilScriptBuilder:
         Returns:
             List of Siril command strings for dark stacking.
         """
-        rej_low = self.config.rejection_low
-        rej_high = self.config.rejection_high
+        rej_clause = self._rej_clause()
         bias_flag = " -bias=../process/master-bias" if with_bias else ""
         return [
             "cd darks",
             "convert dark -out=../process",
             "cd ../process",
-            f"stack dark rej {rej_low} {rej_high} -nonorm{bias_flag} -out=master-dark",
+            f"stack dark {rej_clause} -nonorm{bias_flag} -out=master-dark",
             "cd ..",
         ]
 
@@ -144,14 +147,13 @@ class SirilScriptBuilder:
         Returns:
             List of Siril command strings for flat stacking.
         """
-        rej_low = self.config.rejection_low
-        rej_high = self.config.rejection_high
+        rej_clause = self._rej_clause()
         bias_flag = " -bias=../process/master-bias" if with_bias else ""
         return [
             "cd flats",
             "convert flat -out=../process",
             "cd ../process",
-            f"stack flat rej {rej_low} {rej_high} -norm=mul{bias_flag} -out=master-flat",
+            f"stack flat {rej_clause} -norm=mul{bias_flag} -out=master-flat",
             "cd ..",
         ]
 
@@ -176,7 +178,12 @@ class SirilScriptBuilder:
         commands.append(f"calibrate light {cal_flags}")
 
         # Registration
+        # Phase 1: -2pass analyses all frames, finds the best reference, and
+        # computes the transformation matrix for each frame. It does NOT write
+        # output files — call seqapplyreg to materialise the aligned sequence.
         commands.append("register pp_light -2pass")
+        # Phase 2: apply transforms → creates the r_pp_light sequence on disk.
+        commands.append("seqapplyreg pp_light -framing=cog -interp=lanczos4 -filter-fwhm=2k")
 
         # Stacking
         commands.append(self._stack_command())
@@ -207,72 +214,88 @@ class SirilScriptBuilder:
 
         return " ".join(flags)
 
+    def _rej_clause(self) -> str:
+        """Build the ``rej <type> <low> <high>`` clause for stack commands.
+
+        Returns:
+            Rejection clause string (no leading/trailing spaces).
+        """
+        rej_type = _rejection_type(self.config.rejection_algorithm)
+        if rej_type == "none":
+            return "rej none"
+        return f"rej {rej_type} {self.config.rejection_low} {self.config.rejection_high}"
+
     def _stack_command(self) -> str:
-        """Build the stacking command based on profile settings.
+        """Build the stacking command for light frames based on profile settings.
+
+        Drizzle is intentionally disabled: the CFA→RGB debayer during calibration
+        is incompatible with drizzle, which requires the raw Bayer mosaic.
 
         Returns:
             The complete Siril ``stack`` command string.
         """
-        algo = _rejection_algo_flag(self.config.rejection_algorithm)
-        rej_low = self.config.rejection_low
-        rej_high = self.config.rejection_high
+        rej_clause = self._rej_clause()
         norm = _normalization_flag(self.config.normalization)
-
-        base = f"stack r_pp_light {algo} {rej_low} {rej_high} {norm} -out=stack_result"
-
-        if self.config.drizzle_enabled:
-            scale = self.config.drizzle_scale
-            pixfrac = self.config.drizzle_pixfrac
-            base += f" -drizzle -scale={scale} -pixfrac={pixfrac}"
-
-        return base
+        # -weight=wfwhm: weight frames by FWHM (sharper frames contribute more).
+        return f"stack r_pp_light {rej_clause} {norm} -weight=wfwhm -out=stack_result"
 
     def _stretch_commands(self) -> list[str]:
-        """Generate stretch commands applied to the stacked image.
+        """Generate stretch commands applied to the loaded stacked image.
 
         Returns:
             List of Siril stretch command strings.
         """
         method = self.config.stretch_method
         if method == "asinh":
+            # stretch_strength is the positional 'stretch' argument (1–1000).
+            # -human applies a perceptually-uniform intensity mapping.
             strength = self.config.stretch_strength
-            return [f"asinh -stretch {strength} -human"]
+            return [f"asinh {strength:.1f} -human"]
         if method == "auto":
-            return ["autostretch"]
+            # autostretch with -linked preserves colour balance across channels.
+            return ["autostretch -linked"]
         # linear — no-op, keep linear data
         return []
 
     def _color_commands(self) -> list[str]:
         """Generate colour calibration commands.
 
+        ``rmgreen`` removes the DSLR green colour cast introduced during
+        debayering. It works on any loaded image with no prerequisites.
+
+        ``pcc`` (photometric colour calibration against GAIA) and ``spcc``
+        require a plate-solved image with WCS headers — that is handled by the
+        dedicated plate-solving pipeline step which runs after stretch.
+
         Returns:
             List of Siril colour calibration command strings.
         """
-        return [
-            "pcc",  # Photometric Color Calibration using GAIA
-            "scs",  # Synced Colour Stretch (keeps stars neutral)
-        ]
+        return ["rmgreen"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _rejection_algo_flag(algorithm: str) -> str:
-    """Map a profile rejection algorithm name to a Siril CLI token.
+def _rejection_type(algorithm: str) -> str:
+    """Map a profile rejection algorithm name to a Siril 1.4 rejection type keyword.
+
+    In Siril 1.4, ``stack`` uses: ``rej <type> sigma_low sigma_high``.
+    Valid ``<type>`` values: ``none``, ``percentile``, ``sigma``, ``median``,
+    ``winsorized``, ``linear``, ``generalized``, ``mad``.
 
     Args:
         algorithm: One of ``sigma``, ``winsorized``, ``linear``, ``none``.
 
     Returns:
-        Siril-compatible rejection algorithm token.
+        Siril-compatible rejection type keyword.
     """
     mapping: dict[str, str] = {
-        "sigma": "rej",
-        "winsorized": "wrej",
-        "linear": "lrej",
-        "none": "rej",
+        "sigma": "sigma",
+        "winsorized": "winsorized",
+        "linear": "linear",
+        "none": "none",
     }
-    return mapping.get(algorithm.lower(), "rej")
+    return mapping.get(algorithm.lower(), "winsorized")
 
 
 def _normalization_flag(normalization: str) -> str:
