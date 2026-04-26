@@ -109,10 +109,10 @@ class AstapAdapter:
                 step_name="plate_solving",
                 retryable=True,
             ) from exc
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, PermissionError) as exc:
             raise PipelineStepException(
                 ErrorCode.SYS_EXTERNAL_TOOL_MISSING,
-                f"ASTAP binary not found: {self.binary}",
+                f"ASTAP binary not executable: {self.binary} — {exc}",
                 step_name="plate_solving",
                 retryable=False,
             ) from exc

@@ -57,13 +57,18 @@ RUN command -v siril-cli || \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
+# ASTAP tar.gz is flat (files at root, no subdirectory) — do NOT use
+# --strip-components=1 or all files are silently skipped.
+# chmod 755 is explicit about granting world-execute; +x only adds to
+# whatever bits are already set by tar.
 RUN mkdir -p /opt/astap \
-    && wget -q "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
+    && wget -q --content-disposition \
+        "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
         -O /opt/astap/astap.tar.gz \
-    && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap --strip-components=1 \
+    && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap \
     && rm /opt/astap/astap.tar.gz \
-    && chmod +x /opt/astap/astap \
-    && ln -s /opt/astap/astap /usr/local/bin/astap
+    && chmod 755 /opt/astap/astap \
+    && ln -sf /opt/astap/astap /usr/local/bin/astap
 
 # ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps
