@@ -57,11 +57,13 @@ RUN command -v siril-cli || \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
-# ASTAP plate solver — install via .deb using apt-get (not dpkg) so that
-# all declared Depends: (Qt5 libs, libGL, etc.) are resolved automatically.
-# dpkg -i does NOT fetch dependencies — the binary would start but ld.so
-# would fail to load Qt shared libs and exit 127.
+# ASTAP plate solver — install via apt-get (not dpkg) so that declared
+# Depends: (Qt5, libGL, …) are resolved automatically.
+# libgtk2.0-0 (→ libgdk-x11-2.0 / libgtk-x11-2.0) is NOT listed in the
+# .deb Depends but is required at runtime by the ASTAP binary; install it
+# explicitly before the package so the linker finds it.
 RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgtk2.0-0 \
     && curl -fsSL \
         "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.deb/download" \
         -o /tmp/astap.deb \

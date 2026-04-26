@@ -168,19 +168,27 @@ def check_paths() -> None:
             print(_warn(f"{path}  not found  ({label})"))
             report.add(f"path:{path}", Level.WARNING, "missing")
 
-    # ASTAP star catalogue must contain .290 or .bin files to solve anything
+    # ASTAP star catalogue must contain catalogue files to solve anything.
+    # Known extensions: .290 (G17/H17/…), .1476 (D50), .bin
     star_db = Path("/opt/astap/stars")
     if star_db.exists():
-        cats = list(star_db.glob("*.290")) + list(star_db.glob("*.bin"))
+        cats = (
+            list(star_db.glob("*.290"))
+            + list(star_db.glob("*.1476"))
+            + list(star_db.glob("*.bin"))
+        )
         if cats:
             print(_ok(f"  ASTAP star catalogue: {len(cats)} catalogue file(s)"))
             report.add("astap:catalogue", Level.OK, f"{len(cats)} files")
         else:
+            # Show what IS in the directory to aid diagnosis
+            existing = list(star_db.iterdir())
+            extras = ", ".join(f.name for f in existing[:5]) if existing else "(empty)"
             print(_warn(
-                "  ASTAP star catalogue dir is EMPTY\n"
+                f"  ASTAP star catalogue has no .290/.1476/.bin files (found: {extras})\n"
                 "       -> plate-solving will fail. Run: scripts/init-models.sh"
             ))
-            report.add("astap:catalogue", Level.WARNING, "empty -- run init-models.sh")
+            report.add("astap:catalogue", Level.WARNING, f"no catalogue files -- run init-models.sh")
 
     # Cosmic Clarity model weights (.pth files in /models)
     models_dir = Path("/models")
