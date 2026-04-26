@@ -311,6 +311,9 @@ class PipelineOrchestrator:
                     attempt=attempt,
                     error_code=exc.error_code.value,
                     message=exc.message,
+                    siril_log=(
+                        exc.details.get("siril_log") if exc.details else None
+                    ),
                 )
 
                 error_event = ErrorEvent(

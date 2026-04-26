@@ -10,6 +10,7 @@ bus so WebSocket clients receive real-time updates.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,14 @@ class PreprocessingStep(PipelineStep):
         """
         profile_config = ProcessingProfileConfig(**config)
         frames: dict[str, list[Path]] = context.metadata.get("frames", {})
+
+        # Clean the process/ subdirectory before each Siril run so that stale
+        # .seq files and intermediate FITS from a prior failed attempt cannot
+        # corrupt the new run (affects both job-level retries and new jobs
+        # launched against the same session directory).
+        process_dir = context.work_dir / "process"
+        shutil.rmtree(process_dir, ignore_errors=True)
+        process_dir.mkdir(parents=True, exist_ok=True)
 
         builder = SirilScriptBuilder(
             config=profile_config,
