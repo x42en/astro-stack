@@ -781,7 +781,10 @@ async def check_tool_smoke_tests() -> None:
             180,
         )
 
-        # 4b. Sharpen — imports PyQt6 unconditionally; QT_QPA_PLATFORM=offscreen required
+        # 4b. Sharpen — imports PyQt6 unconditionally; QT_QPA_PLATFORM=offscreen required.
+        # ALL four of --sharpening_mode, --nonstellar_strength, --stellar_amount and
+        # --nonstellar_amount must be supplied, otherwise the script falls back to the
+        # PyQt6 QDialog which blocks indefinitely even with QT_QPA_PLATFORM=offscreen.
         await _cc_dir_test(
             "sharpen",
             cosmic_src / "SetiAstroCosmicClarity.py",
@@ -789,6 +792,7 @@ async def check_tool_smoke_tests() -> None:
                 sys.executable,
                 str(cosmic_src / "SetiAstroCosmicClarity.py"),
                 "--sharpening_mode", "Both",
+                "--nonstellar_strength", "3.0",
                 "--stellar_amount", "0.5",
                 "--nonstellar_amount", "0.5",
                 "--disable_gpu",

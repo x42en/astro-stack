@@ -122,6 +122,29 @@ RUN test -f /opt/cosmic-clarity/requirements.txt \
 # auto-detection; it must be installed alongside PyQt6.
 RUN pip install PyQt6 sep || true
 
+# Upstream denoise script bug (as of AI3.6): when processing a mono 32-bit float
+# FITS file the `actual_bit_depth` local variable is only assigned in the RGB and
+# 32-bit-unsigned branches, but referenced unconditionally in the print() call
+# after hdu.writeto() — causing UnboundLocalError (exit 1) even though the output
+# file was written successfully.  Patch once here so all rebuild layers pick it up.
+RUN python3 - <<'PYEOF'
+import pathlib
+p = pathlib.Path('/opt/cosmic-clarity/setiastrocosmicclarity_denoise.py')
+if not p.exists():
+    print("WARNING: denoise script not found — skipping patch")
+else:
+    txt = p.read_text()
+    old = '                if is_mono:  # Grayscale FITS'
+    new = ('                actual_bit_depth = bit_depth'
+           '  # default (fixes UnboundLocalError for mono 32-bit float FITS)\n'
+           '                if is_mono:  # Grayscale FITS')
+    if old in txt:
+        p.write_text(txt.replace(old, new, 1))
+        print('Patched setiastrocosmicclarity_denoise.py: actual_bit_depth fallback')
+    else:
+        print('WARNING: patch target not found; upstream may have already fixed this')
+PYEOF
+
 # Download new Cosmic Clarity model weights (not committed to the git repo).
 # Scripts load models from exe_dir = /opt/cosmic-clarity/ at runtime.
 # Each download is individually fault-tolerant; a network failure at build time

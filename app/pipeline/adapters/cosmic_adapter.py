@@ -128,6 +128,7 @@ class CosmicClarityAdapter:
         sharpening_mode: str = "Both",
         stellar_amount: float = 0.5,
         nonstellar_amount: float = 0.7,
+        nonstellar_strength: float = 3.0,
         timeout: float = 600.0,
     ) -> None:
         """Apply AI-based sharpening to a FITS image.
@@ -135,9 +136,12 @@ class CosmicClarityAdapter:
         Args:
             input_path: Path to the input FITS file.
             output_path: Desired output FITS file path.
-            sharpening_mode: ``"Stellar"``, ``"Nonstellar"`` or ``"Both"``.
+            sharpening_mode: ``"Stellar Only"``, ``"Non-Stellar Only"`` or ``"Both"``.
             stellar_amount: Sharpening amount for point sources (0.0–1.0).
             nonstellar_amount: Sharpening amount for extended objects (0.0–1.0).
+            nonstellar_strength: PSF radius hint for non-stellar model (1.0–8.0).
+                Must be supplied to avoid the script falling back to an interactive
+                GUI dialog.  Maps to ``--nonstellar_strength`` on the CLI.
             timeout: Maximum execution time in seconds.
 
         Raises:
@@ -151,6 +155,7 @@ class CosmicClarityAdapter:
             "--sharpening_mode", sharpening_mode,
             "--stellar_amount", str(stellar_amount),
             "--nonstellar_amount", str(nonstellar_amount),
+            "--nonstellar_strength", str(nonstellar_strength),
             *self._gpu_args(),
         ]
         expected = self._output_dir / f"{input_path.stem}_sharpened{input_path.suffix}"
@@ -320,80 +325,6 @@ class CosmicClarityAdapter:
 
     def _check_script(self, script: Path, step_name: str) -> None:
         """Verify that a Cosmic Clarity script file exists.
-
-        Raises:
-            PipelineStepException: If the script file is not found.
-        """
-        if not script.exists():
-            raise PipelineStepException(
-                ErrorCode.SYS_EXTERNAL_TOOL_MISSING,
-                f"Cosmic Clarity script not found: {script}",
-                step_name=step_name,
-                retryable=False,
-                details={"script": str(script)},
-            )
-            "--gpu",
-            self._device_index,
-        ]
-
-        await self._run(
-            cmd,
-            step_name="super_resolution",
-            error_code=ErrorCode.PIPE_COSMIC_SUPERRES_FAILED,
-            timeout=timeout,
-        )
-        logger.info("cosmic_super_res_done", output=str(output_path))
-
-    async def remove_stars(
-        self,
-        input_path: Path,
-        output_path: Path,
-        timeout: float = 600.0,
-    ) -> None:
-        """Remove stars from an image, isolating the nebula component.
-
-        Uses the Cosmic Clarity Dark Star model.
-
-        Args:
-            input_path: Path to the input FITS file.
-            output_path: Output path for the star-removed (nebula-only) image.
-            timeout: Maximum execution time in seconds.
-
-        Raises:
-            PipelineStepException: If the script fails or times out.
-        """
-        script = self.source_path / "setiastrocosmicclarity_darkstar.py"
-        self._check_script(script, "star_removal")
-
-        cmd = [
-            sys.executable,
-            str(script),
-            "--input",
-            str(input_path),
-            "--output",
-            str(output_path),
-            "--models_path",
-            str(self.models_path),
-            "--gpu",
-            self._device_index,
-        ]
-
-        await self._run(
-            cmd,
-            step_name="star_separation",
-            error_code=ErrorCode.PIPE_STAR_SEPARATION_FAILED,
-            timeout=timeout,
-        )
-        logger.info("cosmic_star_removal_done", output=str(output_path))
-
-    # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _check_script(self, script: Path, step_name: str) -> None:
-        """Verify that a Cosmic Clarity script file exists.
-
-        Args:
-            script: Expected script path.
-            step_name: Pipeline step name for error reporting.
 
         Raises:
             PipelineStepException: If the script file is not found.
