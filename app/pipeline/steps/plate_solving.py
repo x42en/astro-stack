@@ -61,8 +61,24 @@ class PlateSolvingStep(PipelineStep):
         )
 
         context.metadata.update(result)
-        logger.info("plate_solving_done", ra=result.get("ra"), dec=result.get("dec"))
 
+        if not result.get("solved", False):
+            # ASTAP returned exit 1 — no solution found.  This is not a
+            # pipeline error: the job continues without WCS coordinates.
+            logger.warning(
+                "plate_solving_no_solution",
+                fits=str(context.stacked_fits_path),
+            )
+            return StepResult(
+                success=True,
+                metadata=result,
+                message=(
+                    "Plate solving: no solution found "
+                    "(catalog missing or insufficient stars) — pipeline continues."
+                ),
+            )
+
+        logger.info("plate_solving_done", ra=result.get("ra"), dec=result.get("dec"))
         return StepResult(
             success=True,
             metadata=result,

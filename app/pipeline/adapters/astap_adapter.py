@@ -118,17 +118,33 @@ class AstapAdapter:
             ) from exc
 
         output_text = stdout.decode("utf-8", errors="replace")
-        logger.debug("astap_output", output=output_text[:500])
+        stderr_text = stderr.decode("utf-8", errors="replace")
+        logger.debug("astap_output", stdout=output_text[:500], stderr=stderr_text[:500])
 
         if proc.returncode != 0:
+            # Exit code 1 = no solution found — ASTAP ran correctly but could not
+            # match stars (catalog missing, FOV unknown, insufficient stars, etc.).
+            # This is NOT a pipeline-breaking error; the job continues without WCS.
+            if proc.returncode == 1:
+                diag = (stderr_text or output_text)[:300].strip()
+                logger.warning(
+                    "astap_no_solution",
+                    fits=str(fits_path),
+                    detail=diag or "(no output)",
+                )
+                return {"ra": None, "dec": None, "object_name": "", "solved": False}
+            # Any other non-zero code is a genuine binary/system error.
+            diag = (stderr_text or output_text)[:200]
             raise PipelineStepException(
                 ErrorCode.PIPE_PLATE_SOLVE_FAILED,
-                f"ASTAP returned exit code {proc.returncode}: {output_text[:200]}",
+                f"ASTAP exited with code {proc.returncode}: {diag}",
                 step_name="plate_solving",
-                retryable=True,
+                retryable=False,
             )
 
-        return self._parse_result(fits_path, output_text)
+        result = self._parse_result(fits_path, output_text)
+        result["solved"] = True
+        return result
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -179,7 +195,7 @@ class AstapAdapter:
         Returns:
             Dict with ``ra``, ``dec``, and ``object_name`` keys.
         """
-        result: dict[str, Any] = {"ra": None, "dec": None, "object_name": ""}
+        result: dict[str, Any] = {"ra": None, "dec": None, "object_name": "", "solved": True}
 
         # Try .wcs sidecar first
         wcs_path = fits_path.with_suffix(".wcs")
