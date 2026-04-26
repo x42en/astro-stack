@@ -158,7 +158,17 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
         # Siril will calibrate (dark/flat) at the CFA level, then debayer,
         # which is the correct astrophotography workflow.
         bayer = raw.raw_image_visible.copy()          # uint16, shape (H, W)
-        bayer_pattern = raw.color_desc.decode("ascii")  # e.g. "RGGB"
+
+        # Build the actual 2×2 Bayer pattern from the sensor's top-left pixels.
+        # raw.color_desc gives the *unique* color names (e.g. b"RGBG") in
+        # index order, NOT the 2×2 mosaic string that BAYERPAT requires.
+        # raw.raw_colors_visible[row, col] gives the colour index for each
+        # pixel; combining the two gives the canonical pattern ("RGGB",
+        # "GBRG", "BGGR", or "GRBG") that Siril reads from the header.
+        top2x2 = raw.raw_colors_visible[0:2, 0:2]
+        bayer_pattern = "".join(
+            chr(raw.color_desc[top2x2[r, c]]) for r in range(2) for c in range(2)
+        )
 
     data = bayer.astype(np.float32)
 

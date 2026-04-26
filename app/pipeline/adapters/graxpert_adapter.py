@@ -60,6 +60,8 @@ class GraXpertAdapter:
         output_path: Path,
         method: str = "ai",
         ai_model: str = "GraXpert-AI-1.0.0",
+        correction: int = -1,
+        smoothing: float = 0.5,
         timeout: float = 600.0,
     ) -> None:
         """Remove the sky gradient and background from a FITS image.
@@ -69,6 +71,13 @@ class GraXpertAdapter:
             output_path: Desired output FITS path for the background-corrected image.
             method: Extraction method: ``"ai"`` (U-Net) or ``"polynomial"``.
             ai_model: Name of the GraXpert AI model to use.
+            correction: Extraction aggressiveness in [-2, 2].  Use -1 or -2
+                for extended bright objects (e.g. Orion Nebula) to avoid
+                over-subtracting real nebula signal along with the background.
+                0 = neutral (GraXpert default), 2 = most aggressive.
+            smoothing: Background model smoothing factor (0.0–1.0).  Higher
+                values produce a smoother, more conservative model that is less
+                likely to mistake nebula structure for background gradient.
             timeout: Maximum execution time in seconds.
 
         Raises:
@@ -77,13 +86,13 @@ class GraXpertAdapter:
         # GraXpert can be invoked as a Python module or as an installed CLI entry-point
         graxpert_main = self.source_path / "GraXpert.py"
         if not graxpert_main.exists():
-            # Try installed entry-point
-            graxpert_main_str = "graxpert"
             cmd = self._build_command_installed(
                 input_path=input_path,
                 output_path=output_path,
                 method=method,
                 ai_model=ai_model,
+                correction=correction,
+                smoothing=smoothing,
             )
         else:
             cmd = self._build_command_script(
@@ -92,9 +101,17 @@ class GraXpertAdapter:
                 output_path=output_path,
                 method=method,
                 ai_model=ai_model,
+                correction=correction,
+                smoothing=smoothing,
             )
 
-        logger.info("graxpert_starting", input=str(input_path), method=method)
+        logger.info(
+            "graxpert_starting",
+            input=str(input_path),
+            method=method,
+            correction=correction,
+            smoothing=smoothing,
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -149,6 +166,8 @@ class GraXpertAdapter:
         output_path: Path,
         method: str,
         ai_model: str,
+        correction: int = -1,
+        smoothing: float = 0.5,
     ) -> list[str]:
         """Build the command to invoke GraXpert as a Python script.
 
@@ -158,18 +177,23 @@ class GraXpertAdapter:
             output_path: Output FITS path.
             method: Extraction method (``ai`` or ``polynomial``).
             ai_model: AI model version string.
+            correction: Aggressiveness in [-2, 2].
+            smoothing: Smoothing factor (0.0–1.0).
 
         Returns:
             Command token list.
         """
-        # GraXpert CLI flags use single-dash; filename is positional.
         cmd = [
             sys.executable,
             str(script),
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
+            "-correction", str(correction),
+            "-smoothing_factor", str(smoothing),
         ]
+        if method == "polynomial":
+            cmd += ["-background_extraction_algo", "Splines"]
         return cmd + [str(input_path)]
 
     def _build_command_installed(
@@ -178,6 +202,8 @@ class GraXpertAdapter:
         output_path: Path,
         method: str,
         ai_model: str,
+        correction: int = -1,
+        smoothing: float = 0.5,
     ) -> list[str]:
         """Build the command when GraXpert is installed as a package.
 
@@ -186,15 +212,20 @@ class GraXpertAdapter:
             output_path: Output FITS path.
             method: Extraction method.
             ai_model: AI model version string.
+            correction: Aggressiveness in [-2, 2].
+            smoothing: Smoothing factor (0.0–1.0).
 
         Returns:
             Command token list.
         """
-        # GraXpert CLI flags use single-dash; filename is positional.
         cmd = [
             "graxpert",
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
+            "-correction", str(correction),
+            "-smoothing_factor", str(smoothing),
         ]
+        if method == "polynomial":
+            cmd += ["-background_extraction_algo", "Splines"]
         return cmd + [str(input_path)]

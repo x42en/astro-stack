@@ -253,9 +253,18 @@ class SirilScriptBuilder:
         if method == "asinh":
             # stretch_strength is the positional 'stretch' argument (1–1000).
             # -human applies a perceptually-uniform intensity mapping.
-            # Siril syntax: asinh [-human] stretch  (-human must precede the value)
+            # Siril syntax: asinh [-human] stretch [bg]
+            #
+            # The optional bg parameter is the background level that Siril
+            # subtracts *before* applying the formula:
+            #   output = asinh(stretch * (input - bg)) / asinh(stretch)
+            # Setting bg to a small *negative* value (-0.005) effectively adds
+            # a pedestal to all pixels, recovering ≤ 0.005-ADU over-subtracted
+            # regions from gradient-removal tools (e.g. GraXpert AI mode on
+            # bright extended nebulae).  Properly calibrated sky pixels stay
+            # near-black; only marginally over-subtracted signal is recovered.
             strength = self.config.stretch_strength
-            return [f"asinh -human {strength:.1f}"]
+            return [f"asinh -human {strength:.1f} -0.005"]
         if method == "auto":
             # autostretch with -linked preserves colour balance across channels.
             return ["autostretch -linked"]
