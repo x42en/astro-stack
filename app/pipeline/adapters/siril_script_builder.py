@@ -249,8 +249,9 @@ class SirilScriptBuilder:
         if method == "asinh":
             # stretch_strength is the positional 'stretch' argument (1–1000).
             # -human applies a perceptually-uniform intensity mapping.
+            # Siril syntax: asinh [-human] stretch  (-human must precede the value)
             strength = self.config.stretch_strength
-            return [f"asinh {strength:.1f} -human"]
+            return [f"asinh -human {strength:.1f}"]
         if method == "auto":
             # autostretch with -linked preserves colour balance across channels.
             return ["autostretch -linked"]
