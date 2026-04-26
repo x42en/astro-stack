@@ -57,25 +57,17 @@ RUN command -v siril-cli || \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
-# ASTAP plate solver — install via .deb package (Ubuntu/Debian native, no
-# tar layout guessing needed). dpkg places the binary at /usr/bin/astap.
-# Fallback: if the .deb fails, extract from the tar.gz and use `find` to
-# locate the binary regardless of the internal directory structure.
-RUN curl -fsSL \
+# ASTAP plate solver — install via .deb using apt-get (not dpkg) so that
+# all declared Depends: (Qt5 libs, libGL, etc.) are resolved automatically.
+# dpkg -i does NOT fetch dependencies — the binary would start but ld.so
+# would fail to load Qt shared libs and exit 127.
+RUN apt-get update \
+    && curl -fsSL \
         "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.deb/download" \
         -o /tmp/astap.deb \
-    && dpkg -i /tmp/astap.deb \
+    && apt-get install -y --no-install-recommends /tmp/astap.deb \
     && rm /tmp/astap.deb \
-    || ( \
-        mkdir -p /opt/astap \
-        && curl -fsSL \
-            "https://sourceforge.net/projects/astap-program/files/linux_installer/astap_amd64.tar.gz/download" \
-            -o /opt/astap/astap.tar.gz \
-        && tar -xzf /opt/astap/astap.tar.gz -C /opt/astap \
-        && rm /opt/astap/astap.tar.gz \
-        && find /opt/astap -maxdepth 3 -name 'astap' -type f -exec chmod 755 {} + \
-        && ln -sf "$(find /opt/astap -maxdepth 3 -name 'astap' -type f | head -1)" /usr/local/bin/astap \
-    )
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps
@@ -102,16 +94,24 @@ RUN pip install \
         pydantic pydantic-settings \
         "python-jose[cryptography]" "passlib[bcrypt]" \
         httpx astropy rawpy numpy Pillow \
-        watchdog python-multipart aiofiles anyio structlog
+        watchdog python-multipart aiofiles anyio structlog \
+        # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
+        onnxruntime-gpu
 
 # ── Stage 5: Cosmic Clarity & GraXpert sources ────────────────────────────
 FROM python-deps AS ai-tools
 
 # Cosmic Clarity — MIT licence Python scripts from setiastro
+# Clone first; install requirements separately so a pip failure is fatal
+# (not silently swallowed by the || fallback on the clone).
+# onnxruntime-gpu is already installed above; the requirements.txt may pin
+# additional helpers (tifffile, etc.) that we still want.
 RUN git clone --depth=1 https://github.com/setiastro/cosmicclarity.git \
         /opt/cosmic-clarity \
-    && pip install -r /opt/cosmic-clarity/requirements.txt \
     || echo "WARNING: Cosmic Clarity clone failed — mount sources manually"
+RUN test -f /opt/cosmic-clarity/requirements.txt \
+    && pip install -r /opt/cosmic-clarity/requirements.txt \
+    || true
 
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models
