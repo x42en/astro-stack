@@ -147,7 +147,6 @@ def check_paths() -> None:
     advisory_paths = [
         ("/opt/astap/stars",    "ASTAP star catalogue"),
         ("/opt/cosmic-clarity", "Cosmic Clarity scripts"),
-        ("/opt/graxpert",       "GraXpert source"),
     ]
 
     for path, label in critical_paths:

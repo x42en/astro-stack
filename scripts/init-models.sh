@@ -98,12 +98,13 @@ if command -v graxpert >/dev/null 2>&1; then
     export XDG_DATA_HOME="${MODELS_DIR}"
 
     # GraXpert needs a valid image file to proceed past file-open.
-    # Create a minimal 64x64 single-channel FITS using Python/astropy.
+    # Deconvolution models require at least 512x512 pixels (window_size constraint).
+    # Use 512x512 for all model types to be safe.
     DUMMY_FITS="/tmp/graxpert_dummy.fits"
     python3 - <<'PYEOF'
 import numpy as np
 from astropy.io import fits
-hdu = fits.PrimaryHDU(np.zeros((64, 64), dtype=np.float32))
+hdu = fits.PrimaryHDU(np.random.rand(512, 512).astype(np.float32))
 hdu.writeto("/tmp/graxpert_dummy.fits", overwrite=True)
 PYEOF
 
