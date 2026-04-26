@@ -150,8 +150,14 @@ class JobStepRepository(BaseRepository[JobStep]):
         existing = await self.get_by_job_and_name(step.job_id, step.step_name)
         if existing is not None:
             for field in step.model_fields:
-                if field not in ("id",):
-                    setattr(existing, field, getattr(step, field))
+                if field in ("id",):
+                    continue
+                new_val = getattr(step, field)
+                # Preserve started_at once set — never overwrite with None so
+                # per-step elapsed-time display in the frontend keeps working.
+                if field == "started_at" and new_val is None:
+                    continue
+                setattr(existing, field, new_val)
             self.session.add(existing)
             await self.session.commit()
             await self.session.refresh(existing)

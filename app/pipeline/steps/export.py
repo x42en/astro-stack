@@ -159,20 +159,31 @@ def _export_raster(
     else:
         arr = data
 
+    # Sanitise non-finite values before any arithmetic (NaN/inf in FITS → bad casts)
+    arr = np.nan_to_num(arr.astype(np.float32), nan=0.0, posinf=1.0, neginf=0.0)
+
     # Auto-stretch: clip to 0.01–99.99th percentile
     lo, hi = np.percentile(arr, (0.01, 99.99))
     if hi == lo:
         hi = lo + 1.0
     arr_norm = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
 
-    # 16-bit TIFF
+    # 16-bit TIFF — PIL.fromarray does not support uint16 RGB;
+    # use tifffile when available (installed via Cosmic Clarity requirements), else uint8.
     arr_16 = (arr_norm * 65535).astype(np.uint16)
-    img_16 = (
-        Image.fromarray(arr_16)
-        if arr_16.ndim == 2
-        else Image.fromarray(arr_16, mode="RGB" if arr_16.shape[2] == 3 else "L")
-    )  # type: ignore[call-overload]
-    img_16.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
+    try:
+        import tifffile as _tifffile  # noqa: PLC0415
+        _photometric = "rgb" if arr_16.ndim == 3 and arr_16.shape[2] == 3 else "minisblack"
+        _tifffile.imwrite(str(tiff_path), arr_16, photometric=_photometric, compression="deflate")
+    except ImportError:
+        # Fallback: 8-bit TIFF (PIL uint16 RGB is unsupported)
+        arr_fb = (arr_norm * 255).astype(np.uint8)
+        img_fb = (
+            Image.fromarray(arr_fb)
+            if arr_fb.ndim == 2
+            else Image.fromarray(arr_fb, mode="RGB" if arr_fb.shape[2] == 3 else "L")
+        )
+        img_fb.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
 
     # JPEG (8-bit)
     arr_8 = (arr_norm * 255).astype(np.uint8)
