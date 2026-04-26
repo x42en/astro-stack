@@ -156,9 +156,9 @@ COPY --chown=astro:astro alembic.ini ./alembic.ini
 COPY --chown=astro:astro alembic/ ./alembic/
 RUN mkdir -p alembic/versions
 
-# Copy init-models script
+# Copy helper scripts (init-models.sh, probe.py, ...)
 COPY --chown=astro:astro scripts/ ./scripts/
-RUN chmod +x /app/scripts/init-models.sh 2>/dev/null || true
+RUN chmod +x /app/scripts/init-models.sh /app/scripts/probe.py 2>/dev/null || true
 
 # Expose port
 EXPOSE 8080
