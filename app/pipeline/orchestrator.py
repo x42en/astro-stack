@@ -38,8 +38,10 @@ from app.domain.ws_event import (
     StepStatusEvent,
     StepStatusValue,
 )
+from app.domain.session import SessionStatus
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository, JobStepRepository
+from app.infrastructure.repositories.session_repo import SessionRepository
 from app.infrastructure.storage.file_store import FileStore
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
 from app.pipeline.retry import RetryPolicy
@@ -110,6 +112,7 @@ class PipelineOrchestrator:
 
         self._job_repo = JobRepository(db_session)
         self._step_repo = JobStepRepository(db_session)
+        self._session_repo = SessionRepository(db_session)
         self._file_store = FileStore()
 
     async def run(self) -> dict[str, Any]:
@@ -127,8 +130,11 @@ class PipelineOrchestrator:
         """
         started_at = datetime.now(tz=timezone.utc)
 
-        # Mark job as running
+        # Mark job as running and persist session status to DB
         await self._job_repo.update_status(self.job_id, JobStatus.RUNNING)
+        await self._session_repo.update(
+            self.session_id, {"status": SessionStatus.PROCESSING.value}
+        )
 
         # Notify clients that the session is now processing
         processing_event = SessionStatusEvent(
@@ -213,6 +219,11 @@ class PipelineOrchestrator:
             outputs={k: v for k, v in final_outputs.items() if isinstance(v, str)},
         )
         await self.event_bus.publish_job_event(self.job_id, completed_event)
+
+        # Persist completed status to DB, then notify clients
+        await self._session_repo.update(
+            self.session_id, {"status": SessionStatus.COMPLETED.value}
+        )
 
         # Notify the session channel and broadcast so all clients can refresh
         status_event = SessionStatusEvent(

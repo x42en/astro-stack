@@ -23,9 +23,11 @@ from app.core.errors import AstroStackException
 from app.core.logging import get_logger
 from app.domain.job import JobStatus
 from app.domain.profile import ProcessingProfileConfig
+from app.domain.session import SessionStatus
 from app.domain.ws_event import SessionStatusEvent
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository
+from app.infrastructure.repositories.session_repo import SessionRepository
 from app.infrastructure.storage.file_store import FileStore
 
 logger = get_logger(__name__)
@@ -103,7 +105,10 @@ async def run_pipeline(
                 # steps (e.g. raw_conversion), so converted FITS in work_dir must
                 # be preserved across the ARQ-level retry.
                 raise Retry(defer=30) from exc
-            # Non-retryable failure: notify clients and clean up
+            # Non-retryable failure: persist status to DB, notify clients, clean up
+            await SessionRepository(db_session).update(
+                session_id, {"status": SessionStatus.FAILED.value}
+            )
             failed_event = SessionStatusEvent(
                 session_id=session_id,
                 new_status="failed",
@@ -116,6 +121,9 @@ async def run_pipeline(
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("pipeline_task_unexpected_error", job_id=job_id_str)
+            await SessionRepository(db_session).update(
+                session_id, {"status": SessionStatus.FAILED.value}
+            )
             failed_event = SessionStatusEvent(
                 session_id=session_id,
                 new_status="failed",

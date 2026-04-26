@@ -142,6 +142,20 @@ class FileStore:
         """
         return self.output_root / str(session_id) / "previews" / f"{step_name}.jpg"
 
+    def light_preview_path(self, session_id: uuid.UUID) -> Path:
+        """Return the path where the cached light-frame preview JPEG is stored.
+
+        This preview is generated on-demand from the first discovered light
+        frame and cached permanently alongside the per-step previews.
+
+        Args:
+            session_id: Session UUID.
+
+        Returns:
+            Path under ``/output/{session_id}/previews/light_preview.jpg``.
+        """
+        return self.output_root / str(session_id) / "previews" / "light_preview.jpg"
+
     # ── Frame discovery ───────────────────────────────────────────────────────
 
     def discover_frames(

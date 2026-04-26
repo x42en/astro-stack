@@ -375,3 +375,110 @@ async def get_step_preview(
             detail=f"No preview available for step '{step_name}'.",
         )
     return FileResponse(str(preview_path), media_type="image/jpeg")
+
+
+# ── Light-frame preview ───────────────────────────────────────────────────────
+
+def _generate_light_preview(frame_path: Path, output_path: Path) -> None:
+    """Generate a JPEG preview from a single light frame (sync, run in thread).
+
+    Supports FITS files (via astropy) and RAW/DSLR files (via rawpy).
+    The image is stretched to enhance visibility before saving.
+
+    Args:
+        frame_path: Absolute path to the source light frame.
+        output_path: Destination path for the generated JPEG.
+
+    Raises:
+        RuntimeError: If the file format is not supported or data cannot be read.
+    """
+    import io as _io  # noqa: PLC0415
+
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    suffix = frame_path.suffix.lower()
+
+    if suffix in {".fit", ".fits", ".fts"}:
+        from astropy.io import fits as astropy_fits  # noqa: PLC0415
+
+        with astropy_fits.open(str(frame_path)) as hdul:
+            # Find the first HDU with 2-D (or 3-D) image data
+            data: np.ndarray | None = None
+            for hdu in hdul:
+                if hdu.data is not None and hdu.data.ndim >= 2:
+                    data = hdu.data.astype(np.float32)
+                    break
+            if data is None:
+                raise RuntimeError("No image data found in FITS file.")
+
+        # Collapse colour axis if present (take first channel)
+        if data.ndim == 3:
+            data = data[0]
+
+        # Percentile stretch for visibility
+        lo, hi = np.percentile(data, [1.0, 99.5])
+        data = np.clip((data - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+        img = Image.fromarray((data * 255).astype(np.uint8), mode="L").convert("RGB")
+
+    else:
+        # RAW DSLR files
+        import rawpy  # noqa: PLC0415
+
+        with rawpy.imread(str(frame_path)) as raw:
+            rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
+        img = Image.fromarray(rgb)
+
+    # Downscale to a sensible thumbnail size (max 800 px wide)
+    img.thumbnail((800, 800), Image.LANCZOS)
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    output_path.write_bytes(buf.getvalue())
+
+
+@router.get(
+    "/{session_id}/light-preview",
+    response_class=FileResponse,
+    summary="Get a light-frame thumbnail preview",
+    description=(
+        "Returns a JPEG thumbnail generated from the first discovered light frame. "
+        "The image is generated on demand and cached permanently. "
+        "Returns 404 if no light frames are available."
+    ),
+)
+async def get_light_preview(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> FileResponse:
+    """Serve a light-frame thumbnail for session cards.
+
+    Args:
+        session_id: Session UUID.
+        db: Async database session.
+        _user: Injected auth user.
+
+    Returns:
+        JPEG image as a :class:`~fastapi.responses.FileResponse`.
+
+    Raises:
+        HTTPException: 404 if no light frames exist or the session is not found.
+    """
+    import asyncio  # noqa: PLC0415
+
+    file_store = FileStore()
+    cached = file_store.light_preview_path(session_id)
+    if cached.exists():
+        return FileResponse(str(cached), media_type="image/jpeg")
+
+    session_svc = SessionService(db)
+    session = await session_svc.get_or_404(session_id)
+    frames = file_store.discover_frames(Path(session.inbox_path))
+    lights = frames["lights"]
+    if not lights:
+        raise HTTPException(status_code=404, detail="No light frames found for this session.")
+
+    await asyncio.to_thread(_generate_light_preview, lights[0], cached)
+    return FileResponse(str(cached), media_type="image/jpeg")
