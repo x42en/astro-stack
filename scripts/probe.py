@@ -512,18 +512,26 @@ def check_graxpert() -> None:
         print(_warn("graxpert not installed as package and /opt/graxpert not found"))
         report.add("graxpert:install", Level.WARNING, "not installed")
 
-    models_dir = Path("/models/graxpert")
+    # GraXpert 3.x uses XDG_DATA_HOME/GraXpert/ (capital G+X) with
+    # per-command subdirs: bge-ai-models/, denoise-ai-models/, etc.
+    models_dir = Path("/models/GraXpert")
     if models_dir.exists():
         model_files = list(models_dir.rglob("*.onnx")) + list(models_dir.rglob("*.pth"))
         if model_files:
-            print(_ok(f"  GraXpert models: {len(model_files)} file(s) in /models/graxpert"))
+            print(_ok(f"  GraXpert models: {len(model_files)} file(s) in /models/GraXpert"))
             report.add("graxpert:models", Level.OK, f"{len(model_files)} files")
         else:
-            print(_warn("  /models/graxpert exists but no model files -- AI mode will fail"))
-            report.add("graxpert:models", Level.WARNING, "empty")
+            # Subdirs exist but are empty — models will download on first use
+            subdirs = [d for d in models_dir.iterdir() if d.is_dir()]
+            if subdirs:
+                print(_warn(f"  /models/GraXpert has {len(subdirs)} subdir(s) but no .onnx files -- will download on first use"))
+                report.add("graxpert:models", Level.WARNING, "dirs present but empty -- downloads on first use")
+            else:
+                print(_warn("  /models/GraXpert exists but is empty -- AI mode will download on first use"))
+                report.add("graxpert:models", Level.WARNING, "empty -- downloads on first use")
     else:
-        print(_warn("  /models/graxpert not found -- GraXpert AI mode will fail"))
-        report.add("graxpert:models", Level.WARNING, "missing")
+        print(_warn("  /models/GraXpert not found -- GraXpert AI mode will download models on first use"))
+        report.add("graxpert:models", Level.WARNING, "missing -- downloads on first use")
 
 
 # ---------------------------------------------------------------------------

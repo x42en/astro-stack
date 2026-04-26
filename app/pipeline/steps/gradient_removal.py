@@ -35,20 +35,16 @@ class GradientRemovalStep(PipelineStep):
         Returns:
             True if model files exist, False otherwise.
         """
-        # GraXpert stores models in user's data dir or models_path/graxpert
-        # Check both locations for the ONNX model
+        # GraXpert 3.x stores models under XDG_DATA_HOME/GraXpert/ with
+        # subdirectories per command type:
+        #   bge-ai-models/, denoise-ai-models/,
+        #   deconvolution-object-ai-models/, deconvolution-stars-ai-models/
+        # Each subdir contains .onnx model files.
         models_dir = self._adapter.models_path
         if not models_dir.exists():
             return False
 
-        # GraXpert 3.x uses versioned directories with model.onnx
-        for version_dir in models_dir.iterdir():
-            if version_dir.is_dir():
-                onnx_model = version_dir / "model.onnx"
-                if onnx_model.exists():
-                    return True
-
-        return False
+        return any(models_dir.rglob("*.onnx"))
 
     async def execute(
         self,

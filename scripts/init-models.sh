@@ -84,7 +84,8 @@ fi
 echo ""
 echo "--- GraXpert AI model ---"
 
-GRAXPERT_DIR="${MODELS_DIR}/graxpert"
+# GraXpert 3.x stores models under XDG_DATA_HOME/GraXpert/ (capital G+X)
+GRAXPERT_DIR="${MODELS_DIR}/GraXpert"
 mkdir -p "${GRAXPERT_DIR}"
 
 # GraXpert downloads its AI models on first use.
@@ -116,7 +117,7 @@ PYEOF
             -gpu false \
             -output "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits" \
             "${DUMMY_FITS}" \
-            2>&1 | head -5 || true
+            2>&1 || true
         rm -f "${GRAXPERT_DIR}/dummy_${GRAXPERT_CMD}.fits"
     done
     rm -f "${DUMMY_FITS}"

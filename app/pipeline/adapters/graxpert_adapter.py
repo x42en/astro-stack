@@ -50,7 +50,8 @@ class GraXpertAdapter:
         """
         settings = get_settings()
         self.source_path = Path(source_path or settings.graxpert_source_path)
-        self.models_path = Path(models_path or settings.models_path) / "graxpert"
+        # GraXpert 3.x stores models under XDG_DATA_HOME/GraXpert/ (capital G+X)
+        self.models_path = Path(models_path or settings.models_path) / "GraXpert"
         self.gpu_device = gpu_device
 
     async def remove_background(
