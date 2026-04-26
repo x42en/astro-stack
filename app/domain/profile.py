@@ -77,13 +77,6 @@ class ProcessingProfileConfig(SQLModel):
     gradient_removal_enabled: bool = True
     gradient_removal_method: str = "ai"  # ai|polynomial
     gradient_removal_ai_model: str = "GraXpert-AI-1.0.0"
-    # Extraction aggressiveness [-2, 2].  Negative = conservative (recommended
-    # for bright extended objects like emission nebulae to avoid subtracting
-    # real signal along with the sky background).  0 = GraXpert default.
-    gradient_removal_correction: int = -1
-    # Background model smoothing [0.0, 1.0].  Higher values produce a smoother
-    # gradient model that is less likely to follow fine nebula structure.
-    gradient_removal_smoothing: float = 0.5
 
     # ── Stretch & colour ──────────────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear
