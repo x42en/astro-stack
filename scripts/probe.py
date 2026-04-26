@@ -130,6 +130,53 @@ def _try_import(module: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def _create_dummy_fits(path: Path, size: int = 512) -> None:
+    """Write a *size*×*size* float32 FITS to *path* using astropy.
+
+    Uses random (non-zero) values so tools that normalise by median/MAD do
+    not divide by zero on a blank frame.
+    """
+    import numpy as np
+    from astropy.io import fits as pyfits
+
+    data = (np.random.rand(size, size) * 65535).astype(np.float32)
+    hdu = pyfits.PrimaryHDU(data)
+    hdu.writeto(str(path), overwrite=True)
+
+
+async def _run_async(
+    cmd: list[str],
+    timeout: int = 60,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
+    """Run a subprocess asynchronously; return (returncode, stdout, stderr)."""
+    env = {**os.environ, **(extra_env or {})}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return (
+            proc.returncode,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return -2, "", f"timed out after {timeout}s"
+    except FileNotFoundError:
+        return -1, "", f"binary not found: {cmd[0]}"
+    except Exception as exc:
+        return -99, "", str(exc)
+
+
 # ---------------------------------------------------------------------------
 # Section 1 -- Filesystem paths
 # ---------------------------------------------------------------------------
@@ -574,13 +621,191 @@ def check_env() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section 9 -- Tool smoke tests (live CLI invocations)
+# ---------------------------------------------------------------------------
+
+
+async def check_tool_smoke_tests() -> None:
+    """Run one end-to-end invocation of every pipeline CLI tool.
+
+    Uses a 512×512 random float32 FITS so tools that normalise by
+    median/MAD do not crash on a blank image.  Results are classified as:
+    - OK      : binary ran and produced expected output / benign failure
+    - WARNING : ran but with unexpected exit or missing output file
+    - CRITICAL: binary not found or hard crash (exit 127)
+    """
+    print(_section("9  Tool smoke tests  (live CLI invocations)"))
+    print(_info("  Creating 512×512 dummy FITS for smoke tests..."))
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="probe_smoke_"))
+    dummy = tmpdir / "probe_input.fits"
+
+    try:
+        try:
+            _create_dummy_fits(dummy)
+        except Exception as exc:
+            print(_fail(f"  Cannot create dummy FITS: {exc}"))
+            report.add("smoke:setup", Level.CRITICAL, str(exc)[:80])
+            return
+
+        # ── 1. Siril: load + close via script mode ────────────────────────────
+        print(_info("  [Siril] load + close (script mode)..."))
+        siril_script = tmpdir / "probe.ssf"
+        # Siril load expects filename without extension when working dir is set.
+        siril_script.write_text("requires 1.2.0\nload probe_input\nclose\n")
+        rc, out, err = await _run_async(
+            ["siril-cli", "-d", str(tmpdir), "-s", str(siril_script)],
+            timeout=30,
+        )
+        if rc == -1:
+            print(_fail("  Siril smoke: binary not found"))
+            report.add("smoke:siril", Level.CRITICAL, "not found")
+        elif rc == 0:
+            print(_ok("  Siril smoke: load+close OK"))
+            report.add("smoke:siril", Level.OK)
+        else:
+            snippet = (out + err).strip().splitlines()[-1][:80] if (out + err).strip() else ""
+            print(_warn(f"  Siril smoke: exit {rc} — {snippet}"))
+            report.add("smoke:siril", Level.WARNING, f"exit {rc}")
+
+        # ── 2. ASTAP: plate-solve (no solution expected on dummy) ─────────────
+        print(_info("  [ASTAP] plate-solve attempt (no-solution expected on dummy)..."))
+        astap_dummy = tmpdir / "astap_probe.fits"
+        shutil.copy(dummy, astap_dummy)
+        astap_bin = shutil.which("astap") or "astap"
+        rc, out, err = await _run_async(
+            [astap_bin, "-f", str(astap_dummy), "-r", "30", "-wcs",
+             "-d", "/opt/astap/stars"],
+            timeout=60,
+        )
+        if rc == -1:
+            print(_fail("  ASTAP smoke: binary not found"))
+            report.add("smoke:astap", Level.CRITICAL, "not found")
+        elif rc == 127:
+            print(_fail("  ASTAP smoke: exit 127 — missing shared libs"))
+            report.add("smoke:astap", Level.CRITICAL, "exit 127")
+        else:
+            # Non-zero is expected ("no solution" on a random image) — still OK
+            print(_ok(f"  ASTAP smoke: binary executed cleanly (exit {rc}, no solution expected)"))
+            report.add("smoke:astap", Level.OK, f"exit {rc}")
+
+        # ── 3. GraXpert: background-extraction (the only command used in pipeline)
+        print(_info("  [GraXpert] background-extraction..."))
+        graxpert_out = tmpdir / "probe_graxpert.fits"
+        rc, out, err = await _run_async(
+            ["graxpert",
+             "-cli", "-cmd", "background-extraction",
+             "-gpu", "false",
+             "-output", str(graxpert_out),
+             str(dummy)],
+            timeout=90,
+            extra_env={"XDG_DATA_HOME": "/models"},
+        )
+        if rc == -1:
+            print(_fail("  GraXpert smoke: binary not found"))
+            report.add("smoke:graxpert", Level.CRITICAL, "not found")
+        elif rc != 0:
+            snippet = (out + err).strip().splitlines()[-1][:80] if (out + err).strip() else ""
+            print(_warn(f"  GraXpert smoke: exit {rc} — {snippet}"))
+            report.add("smoke:graxpert", Level.WARNING, f"exit {rc}")
+        elif not graxpert_out.exists():
+            print(_warn("  GraXpert smoke: exit 0 but output file not written"))
+            report.add("smoke:graxpert", Level.WARNING, "no output file")
+        else:
+            print(_ok("  GraXpert smoke: background-extraction OK"))
+            report.add("smoke:graxpert", Level.OK)
+
+        # ── 4. Cosmic Clarity: all four pipeline scripts ───────────────────────
+        cosmic_src = Path("/opt/cosmic-clarity")
+        models_dir = "/models"
+        # GPU device index: extract from GPU_DEVICES env (e.g. "cuda:0" → "0")
+        gpu_raw = os.environ.get("GPU_DEVICES", "cuda:0").split(",")[0].strip()
+        gpu_idx = gpu_raw.split(":")[-1] if ":" in gpu_raw else "0"
+
+        cosmic_tests: list[tuple[str, list[str], int]] = [
+            ("denoise", [
+                sys.executable,
+                str(cosmic_src / "setiastrocosmicclarity_denoise.py"),
+                "--input",  str(dummy),
+                "--output", str(tmpdir / "cc_denoise.fits"),
+                "--denoise_strength", "0.5",
+                "--models_path", models_dir,
+                "--gpu", gpu_idx,
+            ], 180),
+            ("sharpen", [
+                sys.executable,
+                str(cosmic_src / "SetiAstroCosmicClarity.py"),
+                "--input",  str(dummy),
+                "--output", str(tmpdir / "cc_sharpen.fits"),
+                "--stellar_amount",    "0.5",
+                "--nonstellar_amount", "0.5",
+                "--radius", "2",
+                "--models_path", models_dir,
+                "--gpu", gpu_idx,
+            ], 180),
+            ("super_resolution", [
+                sys.executable,
+                str(cosmic_src / "SetiAstroCosmicClarity_SuperRes.py"),
+                "--input",  str(dummy),
+                "--output", str(tmpdir / "cc_superres.fits"),
+                "--scale", "2",
+                "--models_path", models_dir,
+                "--gpu", gpu_idx,
+            ], 300),
+            ("star_removal", [
+                sys.executable,
+                str(cosmic_src / "setiastrocosmicclarity_darkstar.py"),
+                "--input",  str(dummy),
+                "--output", str(tmpdir / "cc_starrem.fits"),
+                "--models_path", models_dir,
+                "--gpu", gpu_idx,
+            ], 180),
+        ]
+
+        for name, cmd, timeout in cosmic_tests:
+            script_path = Path(cmd[1])
+            if not script_path.exists():
+                print(_warn(f"  Cosmic smoke [{name}]: script not found — skipped"))
+                report.add(f"smoke:cosmic:{name}", Level.WARNING, "script missing")
+                continue
+
+            print(_info(f"  [Cosmic Clarity] {name}..."))
+            rc, out, err = await _run_async(cmd, timeout=timeout)
+            out_path = Path(cmd[cmd.index("--output") + 1])
+
+            if rc == -2:
+                print(_warn(f"  Cosmic smoke [{name}]: timed out after {timeout}s"))
+                report.add(f"smoke:cosmic:{name}", Level.WARNING, "timeout")
+            elif rc == -1:
+                print(_fail(f"  Cosmic smoke [{name}]: Python interpreter not found"))
+                report.add(f"smoke:cosmic:{name}", Level.CRITICAL, "python not found")
+            elif rc != 0:
+                snippet = (out + err).strip().splitlines()[-1][:80] if (out + err).strip() else ""
+                print(_warn(f"  Cosmic smoke [{name}]: exit {rc} — {snippet}"))
+                report.add(f"smoke:cosmic:{name}", Level.WARNING, f"exit {rc}")
+            elif not out_path.exists():
+                print(_warn(f"  Cosmic smoke [{name}]: exit 0 but output file not written"))
+                report.add(f"smoke:cosmic:{name}", Level.WARNING, "no output file")
+            else:
+                print(_ok(f"  Cosmic smoke [{name}]: OK"))
+                report.add(f"smoke:cosmic:{name}", Level.OK)
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
 async def main() -> int:
+    quick = "--quick" in sys.argv
+
     print(_c("\n  AstroStack Worker Environment Probe", "1;37"))
     print(_info(f"Python {sys.version.split()[0]}  |  pid {os.getpid()}"))
+    if quick:
+        print(_info("  --quick: section 9 smoke tests skipped"))
 
     check_paths()
     check_python_imports()
@@ -590,6 +815,9 @@ async def main() -> int:
     check_cosmic_clarity()
     check_graxpert()
     check_env()
+
+    if not quick:
+        await check_tool_smoke_tests()
 
     report.print_summary()
     return 1 if report.has_critical() else 0
