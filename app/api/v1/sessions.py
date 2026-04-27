@@ -387,6 +387,10 @@ async def delete_session(
 
     session_repo = SessionRepository(db)
     await session_repo.delete(session_id)
+
+
+@router.get(
+    "/{session_id}/step-preview/{step_name}",
     response_class=FileResponse,
     summary="Get a per-step JPEG preview",
     description=(
