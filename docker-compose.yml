@@ -33,7 +33,7 @@ x-astro-common: &astro-common
     - MODELS_PATH=/models
     # External tools
     - SIRIL_BINARY=siril-cli
-    - ASTAP_BINARY=astap
+    - ASTAP_BINARY=astap_cli
     - ASTAP_STAR_DB_PATH=/opt/astap/stars
     # Pipeline
     - PIPELINE_MAX_RETRIES=3
@@ -134,7 +134,7 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
@@ -182,7 +182,7 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
@@ -227,7 +227,7 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0

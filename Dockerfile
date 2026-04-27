@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wcslib-dev libjpeg-dev libpng-dev libtiff-dev \
     libheif-dev libexiv2-dev \
     # Misc
-    ca-certificates xvfb libgomp1 zstd \
+    ca-certificates libgomp1 zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Create Python 3.12 as default
@@ -54,33 +54,32 @@ RUN apt-get update \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
-# ASTAP plate solver — the .deb installs the full GUI binary to /opt/astap/.
-# In Docker there is no physical display, so calling it directly causes:
-#   Gtk-WARNING: cannot open display
-# Solution: install the .deb (provides the solver engine + star matching code)
-# and create an `astap_cli` wrapper that runs it via `xvfb-run -a`, which
-# starts a throwaway Xvfb virtual framebuffer so GTK can initialise.
-# `xvfb` is already installed in stage 1 (system-base) — no extra package
-# needed here.  Using a wrapper means the astap_cli SourceForge binary is NOT
-# needed (its download URL is not reliable via the SourceForge CDN).
+# ASTAP plate solver — use the standalone `astap_cli` binary published on
+# SourceForge (project: astap-program / linux_installer). This is the
+# barebone command-line solver: no GTK, no display, no Xvfb wrapper needed.
+# It supports our exact usage (-f -r -wcs -d) and is purpose-built for
+# headless environments. The previous approach (install the GUI .deb and
+# wrap it with xvfb-run) pulled libgtk2.0-0 + xvfb (~30+ MB) and added
+# 100-300ms startup overhead per solve for nothing.
 #
-# libgtk2.0-0 is required at runtime by the astap GUI binary.
+# The star catalogue (.290 / .1476 files in /opt/astap/stars) is downloaded
+# separately by scripts/init-models.sh into a persisted volume — it is not
+# bundled with the binary, so we just create the mount point here.
+#
 # Use wget with retries — SourceForge CDN can return 504 on first try.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgtk2.0-0 \
+    && apt-get install -y --no-install-recommends unzip \
     && wget --tries=5 --waitretry=15 --timeout=120 -q \
-        "https://downloads.sourceforge.net/project/astap-program/linux_installer/astap_amd64.deb" \
-        -O /tmp/astap.deb \
-    && apt-get install -y --no-install-recommends /tmp/astap.deb \
-    && rm /tmp/astap.deb \
+        "https://downloads.sourceforge.net/project/astap-program/linux_installer/astap_command-line_version_Linux_amd64.zip" \
+        -O /tmp/astap_cli.zip \
+    && unzip -j /tmp/astap_cli.zip astap_cli -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/astap_cli \
+    && rm /tmp/astap_cli.zip \
+    && apt-get purge -y unzip \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
-    # Create the astap_cli wrapper: runs /opt/astap/astap (installed by the
-    # .deb above) through xvfb-run so GTK does not fail on a headless host.
-    # -a = auto-select a free display number (avoids conflicts on multi-GPU
-    # builds where two worker containers may run in parallel).
-    && printf '#!/bin/sh\nexec xvfb-run -a /opt/astap/astap "$@"\n' \
-        > /usr/local/bin/astap_cli \
-    && chmod +x /usr/local/bin/astap_cli
+    && mkdir -p /opt/astap/stars \
+    && /usr/local/bin/astap_cli -h > /dev/null 2>&1 || true
 
 # ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps

@@ -109,6 +109,27 @@ class SirilScriptBuilder:
         commands.append("close")
         return commands
 
+    def build_pcc_commands(self) -> list[str]:
+        """Build a standalone Siril command sequence to apply ``pcc``.
+
+        Photometric Colour Calibration must run on linear (un-stretched) data
+        and requires the FITS to carry valid WCS headers (set by ASTAP).
+        It is invoked separately from the stretch script so the orchestrator
+        can tolerate failures (e.g. catalogue download error) without
+        aborting the whole post-processing chain.
+
+        Returns:
+            Ordered list of Siril command strings.
+        """
+        # ``pcc`` defaults: catalogue=auto (APASS), limit-mag derived from FOV.
+        # We keep flags minimal so Siril picks sane defaults from the WCS.
+        return [
+            "load for_stretch",
+            "pcc",
+            "save for_stretch",
+            "close",
+        ]
+
     # ── Private command builders ──────────────────────────────────────────────
 
     def _bias_commands(self) -> list[str]:

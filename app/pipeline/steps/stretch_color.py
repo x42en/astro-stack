@@ -72,6 +72,33 @@ class StretchColorStep(PipelineStep):
             frames={},
             work_dir=context.work_dir / "output",
         )
+
+        # Photometric Colour Calibration (PCC) — runs only if plate-solving
+        # produced WCS headers in the FITS. Tolerated as best-effort: a PCC
+        # failure (missing catalogue, no internet, low star count) must NOT
+        # break the post-processing chain.
+        wcs_solved = bool(context.metadata.get("solved", False))
+        if wcs_solved and profile_config.color_calibration_enabled:
+            try:
+                async with SirilAdapter(
+                    work_dir=context.work_dir / "output",
+                    pipe_dir=context.work_dir / "pipes_pcc",
+                ) as siril:
+                    for command in builder.build_pcc_commands():
+                        if context.cancelled:
+                            break
+                        await siril.run_command(command, timeout=180.0)
+                # PCC saves back to for_stretch.fit; promote to .fits so the
+                # stretch script that follows reloads the calibrated image.
+                import os  # noqa: PLC0415
+
+                pcc_out = context.work_dir / "output" / "for_stretch.fit"
+                if pcc_out.exists():
+                    os.replace(str(pcc_out), str(siril_input))
+                logger.info("siril_pcc_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("siril_pcc_failed", error=str(exc))
+
         commands = builder.build_postprocessing_commands()
 
         if not commands:
