@@ -103,9 +103,9 @@ RUN pip install \
         fastapi "uvicorn[standard]" websockets \
         sqlmodel asyncpg alembic greenlet \
         arq "redis[hiredis]" \
-        pydantic pydantic-settings \
+        "pydantic[email]" pydantic-settings email-validator \
         "python-jose[cryptography]" "passlib[bcrypt]" \
-        httpx astropy astroquery rawpy numpy Pillow \
+        httpx astropy astroquery rawpy numpy Pillow ExifRead \
         watchdog python-multipart aiofiles anyio structlog \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
