@@ -177,18 +177,17 @@ class SirilScriptBuilder:
         cal_flags = self._calibration_flags(has_darks, has_flats)
         commands.append(f"calibrate light {cal_flags}")
 
-        # Registration
-        # -noout computes star alignment transforms and stores them in
-        # pp_light.seq, making r_pp_light immediately available to the stack
-        # command without writing aligned frames to disk.
-        # This avoids two fatal bugs caused by the previous 2-step approach:
-        #   1. seqapplyreg -framing=cog inflates the output image with zero-padded
-        #      borders; addscale normalization then measures background ≈ 0 over
-        #      the mostly-empty canvas → normalization collapses → black stack.
-        #   2. -weight=wfwhm requires FWHM data in r_pp_light.seq; after
-        #      seqapplyreg this data is not reliably carried over → all frames
-        #      get weight = 0 → stacked result = 0 → black stack.
-        commands.append("register pp_light -noout")
+        # Registration — two-step approach (Siril < 1.2.0 does not support -noout).
+        # Step 1: analyse star patterns and compute per-frame transforms. This
+        # writes only pp_light.seq metadata; no output frames are produced yet.
+        commands.append("register pp_light -2pass")
+        # Step 2: apply transforms and write aligned frames to disk.
+        # -framing=min crops to the intersection of all frames so the output
+        # images have no zero-padded borders. This prevents addscale normalization
+        # from collapsing: with cog/max framing the empty borders drive the
+        # background estimate to ≈ 0, which causes the normalised stack to be
+        # entirely black.
+        commands.append("seqapplyreg pp_light -framing=min -interp=lanczos4")
 
         # Stacking
         commands.append(self._stack_command())

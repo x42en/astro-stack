@@ -100,12 +100,15 @@ async def run_pipeline(
                 error_code=exc.error_code.value,
                 message=exc.message,
             )
-            if exc.retryable:
+            # Cap ARQ-level retries so the session is eventually marked FAILED
+            # rather than staying in Processing indefinitely. job_try is 1-based.
+            _MAX_ARQ_TRIES = 3
+            if exc.retryable and ctx.get("job_try", 1) < _MAX_ARQ_TRIES:
                 # Do NOT clean up: the orchestrator resumes from already-succeeded
                 # steps (e.g. raw_conversion), so converted FITS in work_dir must
                 # be preserved across the ARQ-level retry.
                 raise Retry(defer=30) from exc
-            # Non-retryable failure: persist status to DB, notify clients, clean up
+            # Retries exhausted or non-retryable: persist FAILED, notify, clean up
             await SessionRepository(db_session).update(
                 session_id, {"status": SessionStatus.FAILED.value}
             )
