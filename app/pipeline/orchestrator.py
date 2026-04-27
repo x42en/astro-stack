@@ -484,7 +484,10 @@ class PipelineOrchestrator:
                 )
                 await self.event_bus.publish_job_event(self.job_id, error_event)
 
-                if not self.retry_policy.should_retry(exc.error_code, attempt):
+                # Stop immediately if the exception is explicitly non-retryable
+                # (e.g. unsupported Siril parameter, disk full) regardless of
+                # the error-code-level retry policy.
+                if not exc.retryable or not self.retry_policy.should_retry(exc.error_code, attempt):
                     break
 
                 await self._upsert_step(
