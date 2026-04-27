@@ -75,12 +75,12 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Gradient removal ──────────────────────────────────────────────────────
     gradient_removal_enabled: bool = True
-    gradient_removal_method: str = "ai"  # ai|polynomial
+    gradient_removal_method: str = "polynomial"  # ai|polynomial
     gradient_removal_ai_model: str = "GraXpert-AI-1.0.0"
 
     # ── Stretch & colour ──────────────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear
-    stretch_strength: float = 100.0
+    stretch_strength: float = 30.0
     color_calibration_enabled: bool = True
 
     # ── Denoise ───────────────────────────────────────────────────────────────
@@ -129,7 +129,9 @@ PRESET_STANDARD = ProcessingProfileConfig(
     drizzle_enabled=False,
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
+    gradient_removal_method="polynomial",
     stretch_method="asinh",
+    stretch_strength=30.0,
     color_calibration_enabled=True,
     denoise_enabled=True,
     denoise_strength=0.8,
@@ -147,7 +149,9 @@ PRESET_QUALITY = ProcessingProfileConfig(
     drizzle_pixfrac=0.7,
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
+    gradient_removal_method="polynomial",
     stretch_method="asinh",
+    stretch_strength=30.0,
     color_calibration_enabled=True,
     denoise_enabled=True,
     denoise_strength=0.9,
