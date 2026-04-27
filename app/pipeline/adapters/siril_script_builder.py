@@ -178,16 +178,17 @@ class SirilScriptBuilder:
         commands.append(f"calibrate light {cal_flags}")
 
         # Registration
-        # Phase 1: -2pass analyses all frames, finds the best reference, and
-        # computes the transformation matrix for each frame. It does NOT write
-        # output files — call seqapplyreg to materialise the aligned sequence.
-        commands.append("register pp_light -2pass")
-        # Phase 2: apply transforms → creates the r_pp_light sequence on disk.
-        # No -filter-fwhm here: if register excluded frames with too few star
-        # pairs, seqapplyreg has no FWHM data for those frames and any filter
-        # would zero out the input set regardless of the threshold. The stacking
-        # step already applies -weight=wfwhm to down-weight poor-quality frames.
-        commands.append("seqapplyreg pp_light -framing=cog -interp=lanczos4")
+        # -noout computes star alignment transforms and stores them in
+        # pp_light.seq, making r_pp_light immediately available to the stack
+        # command without writing aligned frames to disk.
+        # This avoids two fatal bugs caused by the previous 2-step approach:
+        #   1. seqapplyreg -framing=cog inflates the output image with zero-padded
+        #      borders; addscale normalization then measures background ≈ 0 over
+        #      the mostly-empty canvas → normalization collapses → black stack.
+        #   2. -weight=wfwhm requires FWHM data in r_pp_light.seq; after
+        #      seqapplyreg this data is not reliably carried over → all frames
+        #      get weight = 0 → stacked result = 0 → black stack.
+        commands.append("register pp_light -noout")
 
         # Stacking
         commands.append(self._stack_command())
@@ -240,8 +241,12 @@ class SirilScriptBuilder:
         """
         rej_clause = self._rej_clause()
         norm = _normalization_flag(self.config.normalization)
-        # -weight=wfwhm: weight frames by FWHM (sharper frames contribute more).
-        return f"stack r_pp_light {rej_clause} {norm} -weight=wfwhm -out=stack_result"
+        # Note: -weight=wfwhm is intentionally omitted. When using -noout
+        # registration, the virtual r_pp_light sequence does not carry the
+        # per-frame FWHM measurements from pp_light.seq. Siril then assigns
+        # all frames weight = 0, producing an all-black stack. Equal weighting
+        # is correct and safe for well-tracked astrophotography sessions.
+        return f"stack r_pp_light {rej_clause} {norm} -out=stack_result"
 
     def _stretch_commands(self) -> list[str]:
         """Generate stretch commands applied to the loaded stacked image.
