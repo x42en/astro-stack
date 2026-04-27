@@ -162,6 +162,9 @@ class GraXpertAdapter:
         """
         # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
         # Without it the script prints usage help and exits 2.
+        # Algorithm selection: polynomial/Splines is the default when -ai_version
+        # is omitted; AI mode requires -ai_version <model>.
+        # Note: -background_extraction_algo is NOT a valid CLI flag in GraXpert 3.x.
         cmd = [
             sys.executable,
             str(script),
@@ -170,8 +173,8 @@ class GraXpertAdapter:
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
         ]
-        if method == "polynomial":
-            cmd += ["-background_extraction_algo", "Splines"]
+        if method == "ai":
+            cmd += ["-ai_version", ai_model]
         return cmd + [str(input_path)]
 
     def _build_command_installed(
@@ -194,6 +197,9 @@ class GraXpertAdapter:
         """
         # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
         # Without it the entry-point prints usage help and exits 2.
+        # Algorithm selection: polynomial/Splines is the default when -ai_version
+        # is omitted; AI mode requires -ai_version <model>.
+        # Note: -background_extraction_algo is NOT a valid CLI flag in GraXpert 3.x.
         cmd = [
             "graxpert",
             "-cli",
@@ -201,6 +207,6 @@ class GraXpertAdapter:
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
         ]
-        if method == "polynomial":
-            cmd += ["-background_extraction_algo", "Splines"]
+        if method == "ai":
+            cmd += ["-ai_version", ai_model]
         return cmd + [str(input_path)]
