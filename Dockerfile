@@ -35,24 +35,21 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 # ── Stage 2: Siril headless ────────────────────────────────────────────────
 FROM system-base AS siril-build
 
-# Install Siril 1.4.2 from AppImage (simplest cross-distro approach)
-RUN wget -q "https://siril.org/download/siril-1.4.2-x86_64.AppImage" \
-        -O /opt/siril.AppImage \
-    && chmod +x /opt/siril.AppImage \
-    && /opt/siril.AppImage --appimage-extract \
-    && mv squashfs-root /opt/siril-extracted \
-    && ln -s /opt/siril-extracted/usr/bin/siril-cli /usr/local/bin/siril-cli \
-    && ln -s /opt/siril-extracted/usr/bin/siril /usr/local/bin/siril \
-    || true
-
-# Fallback: install Siril from PPA if AppImage fails
-RUN command -v siril-cli || \
-    (apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common \
+# Install Siril 1.4.x from the official Siril PPA (ppa:lock042/siril).
+# This PPA ships Siril 1.4.x for Ubuntu 24.04 (Noble) and is the distribution
+# channel maintained by the Siril team for all Ubuntu releases.
+# The previous AppImage approach required FUSE and failed silently in Docker
+# (masked by || true), causing the fallback to install the outdated Ubuntu
+# archive version (~1.0.x) that does not support the -noout register flag.
+# The trailing siril-cli --version line ensures the build fails immediately
+# if Siril is not correctly installed — no more silent regressions.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository -y ppa:lock042/siril \
     && apt-get update \
     && apt-get install -y --no-install-recommends siril \
-    && rm -rf /var/lib/apt/lists/*)
+    && rm -rf /var/lib/apt/lists/* \
+    && siril-cli --version
 
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
