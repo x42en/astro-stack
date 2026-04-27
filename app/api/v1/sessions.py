@@ -340,8 +340,53 @@ async def delete_scratch(
     await file_store.cleanup_work_dir(session_id)
 
 
-@router.get(
-    "/{session_id}/step-preview/{step_name}",
+@router.delete(
+    "/{session_id}",
+    status_code=204,
+    summary="Delete a session",
+    description=(
+        "Permanently delete a session: removes the DB record and all associated "
+        "files (inbox frames, intermediate working files, output renders and previews). "
+        "Returns 409 if a pipeline job is currently running — cancel it first."
+    ),
+)
+async def delete_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> None:
+    """Delete a session and all its files.
+
+    Args:
+        session_id: Session UUID.
+        db: Injected database session.
+        _user: Injected auth user.
+
+    Raises:
+        HTTPException: 404 if the session does not exist.
+        HTTPException: 409 if a pipeline job is currently running.
+    """
+    sess_service = SessionService(db)
+    await sess_service.get_or_404(session_id)
+
+    from app.infrastructure.repositories.job_repo import JobRepository  # noqa: PLC0415
+    from app.infrastructure.repositories.session_repo import SessionRepository  # noqa: PLC0415
+
+    job_repo = JobRepository(db)
+    active_job = await job_repo.get_active_job_for_session(session_id)
+    if active_job is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pipeline job {active_job.id} is currently running. Cancel it before deleting the session.",
+        )
+
+    # Delete files first — if the filesystem operation fails the DB record is
+    # preserved and the endpoint returns an error, keeping data consistent.
+    file_store = FileStore()
+    await file_store.delete_session_files(session_id)
+
+    session_repo = SessionRepository(db)
+    await session_repo.delete(session_id)
     response_class=FileResponse,
     summary="Get a per-step JPEG preview",
     description=(

@@ -300,6 +300,22 @@ class SirilAdapter:
                                 retryable=False,
                                 details={"command": command, "siril_log": log_context},
                             )
+                        # "Unknown parameter" means the installed Siril version does
+                        # not recognise a flag we sent. This is a configuration error —
+                        # retrying will never help. Fail immediately so the session is
+                        # marked FAILED right away instead of burning all retry attempts.
+                        is_unknown_param = any(
+                            "unknown parameter" in msg.lower()
+                            for msg in log_context
+                        )
+                        if is_unknown_param:
+                            raise PipelineStepException(
+                                ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
+                                f"Siril command '{command}' failed: unsupported parameter (check Siril version). {event.message}",
+                                step_name=cmd_name,
+                                retryable=False,
+                                details={"command": command, "siril_message": event.message, "siril_log": log_context},
+                            )
                         raise PipelineStepException(
                             ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
                             f"Siril command '{command}' failed: {event.message}",
