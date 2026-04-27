@@ -193,7 +193,12 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
             chr(raw.color_desc[top2x2[r, c]]) for r in range(2) for c in range(2)
         )
 
-    data = bayer.astype(np.float32)
+    # Normalise to [0.0, 1.0].  Siril's float32 FITS convention uses a
+    # [0, 1] scale: values > 1.0 are clipped to 1.0 (saturated), so writing
+    # raw ADU counts (0–65535) would make every pixel clip to 1.0 → after
+    # addscale stack normalisation the background gets subtracted → all-black
+    # stack.  Dividing by 65535 maps the full 16-bit range to [0, 1].
+    data = bayer.astype(np.float32) / 65535.0
 
     hdu = fits.PrimaryHDU(data=data)
     hdu.header["ORIGINAL"] = str(raw_path.name)
