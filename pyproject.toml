@@ -38,6 +38,8 @@ dependencies = [
     "rawpy>=0.22.0",
     "numpy>=1.26.0",
     "Pillow>=10.3.0",
+    # EXIF extraction from camera RAW files (NEF/CR2/ARW/DNG) — pure-python
+    "ExifRead>=3.0.0",
     # File watching
     "watchdog>=4.0.0",
     # Utilities

@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware.error_handler import register_error_handlers
 from app.api.v1.catalog import router as catalog_router
+from app.api.v1.gallery import router as gallery_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.sessions import router as sessions_router
@@ -154,6 +155,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(profiles_router, prefix="/api/v1")
     app.include_router(catalog_router, prefix="/api/v1")
+    app.include_router(gallery_router, prefix="/api/v1")
     app.include_router(ws_router)
 
     # ── Health check ──────────────────────────────────────────────────────────

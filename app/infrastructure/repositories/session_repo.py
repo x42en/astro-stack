@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 
 from app.domain.session import AstroSession, SessionStatus
@@ -49,7 +49,13 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(func.count(AstroSession.id))  # type: ignore[arg-type]
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -67,7 +73,13 @@ class SessionRepository(BaseRepository[AstroSession]):
             AstroSession.status == status.value
         )
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -91,7 +103,13 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(AstroSession).where(AstroSession.status == status.value)
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -114,7 +132,13 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(AstroSession)
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.scalars().all())

@@ -100,12 +100,29 @@ class AstroSession(SQLModel, table=True):
     ra: Optional[float] = Field(default=None)
     dec: Optional[float] = Field(default=None)
 
+    # Capture timestamp of the earliest light frame (extracted from EXIF
+    # DateTimeOriginal for RAW files, or DATE-OBS / DATE for FITS).  Falls
+    # back to ``None`` when no exploitable header is found.
+    acquired_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
     # User-supplied target coordinates (J2000, decimal degrees).
     # When set, ASTAP plate-solve uses them as the search centre with a small
     # radius, dramatically improving solve speed and reliability.  These are
     # NOT overwritten by the plate-solve result (which populates ra/dec).
     target_ra: Optional[float] = Field(default=None)
     target_dec: Optional[float] = Field(default=None)
+
+    # ── Public gallery ──────────────────────────────────────────────────
+    is_in_gallery: bool = Field(default=False, index=True)
+    gallery_published_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    gallery_author_name: Optional[str] = Field(default=None, max_length=120)
+    gallery_download_count: int = Field(default=0, ge=0)
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -172,6 +189,11 @@ class SessionRead(SQLModel):
     dec: Optional[float]
     target_ra: Optional[float]
     target_dec: Optional[float]
+    acquired_at: Optional[datetime]
+    is_in_gallery: bool = False
+    gallery_published_at: Optional[datetime] = None
+    gallery_author_name: Optional[str] = None
+    gallery_download_count: int = 0
     created_at: datetime
     updated_at: datetime
 

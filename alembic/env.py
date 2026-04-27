@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 import app.domain.session  # noqa: F401
 import app.domain.job  # noqa: F401
 import app.domain.profile  # noqa: F401
+import app.domain.gallery  # noqa: F401
 from sqlmodel import SQLModel
 
 from app.core.config import get_settings

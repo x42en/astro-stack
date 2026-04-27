@@ -212,6 +212,9 @@ async def upload_chunk(
         file_store = service._file_store
         frames = file_store.discover_frames(session_inbox_path)
         detected_format = file_store.detect_input_format(frames)
+        from app.pipeline.utils.exif import earliest_acquired_at
+
+        acquired_at = earliest_acquired_at(frames["lights"])
         await service._session_repo.update(
             session_uuid,
             {
@@ -221,6 +224,7 @@ async def upload_chunk(
                 "frame_count_bias": len(frames["bias"]),
                 "input_format": InputFormat(detected_format) if frames["lights"] else None,
                 "status": SessionStatus.READY if len(frames["lights"]) > 0 else SessionStatus.PENDING,
+                "acquired_at": acquired_at,
             },
         )
 

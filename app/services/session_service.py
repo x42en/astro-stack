@@ -74,6 +74,13 @@ class SessionService:
 
         name = inbox.name or inbox_path
 
+        # Best-effort acquisition timestamp from the earliest light frame.
+        # Failures are silent: the column stays NULL and the UI falls back
+        # to created_at.
+        from app.pipeline.utils.exif import earliest_acquired_at
+
+        acquired_at = earliest_acquired_at(frames["lights"])
+
         session = AstroSession(
             name=name,
             inbox_path=inbox_path,
@@ -83,6 +90,7 @@ class SessionService:
             frame_count_darks=len(frames["darks"]),
             frame_count_flats=len(frames["flats"]),
             frame_count_bias=len(frames["bias"]),
+            acquired_at=acquired_at,
         )
 
         created = await self._session_repo.create(session)
