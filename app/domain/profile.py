@@ -167,7 +167,9 @@ PRESET_QUALITY = ProcessingProfileConfig(
     stretch_method="asinh",
     stretch_strength=200.0,
     color_calibration_enabled=True,
-    photometric_calibration_enabled=True,
+    # OFF by default even on QUALITY: PCC tends to neutralise residual Hα on
+    # stock DSLR.  Users with defiltered/OSC astro cameras can opt-in per profile.
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.9,
     sharpen_enabled=True,

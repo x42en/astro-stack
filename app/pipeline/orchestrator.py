@@ -262,6 +262,9 @@ class PipelineOrchestrator:
         existing_steps = {s.step_name: s for s in await self._step_repo.list_by_job(self.job_id)}
 
         config_dict = self.profile_config.model_dump()
+        # Expose the active profile config to downstream steps (notably the
+        # ExportStep which embeds it into output metadata / badges).
+        context.metadata["profile_config"] = config_dict
         final_outputs: dict[str, Any] = {}
 
         for step_index, step in enumerate(steps):
