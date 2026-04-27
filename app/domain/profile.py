@@ -42,6 +42,9 @@ class ProcessingProfileConfig(SQLModel):
         stretch_method: Stretch algorithm applied after stacking.
         stretch_strength: Strength parameter for asinh stretch.
         color_calibration_enabled: Whether to run photometric color calibration.
+        photometric_calibration_enabled: Whether to run Siril ``pcc`` (requires
+            plate-solve).  Recommended only for defiltered/OSC astro cameras;
+            on stock DSLR it tends to neutralise residual H\u03b1.
         denoise_enabled: Whether to run Cosmic Clarity Denoise.
         denoise_strength: Denoise strength (0.0–1.0).
         denoise_luminance_only: Apply denoise to luminance channel only.
@@ -82,6 +85,15 @@ class ProcessingProfileConfig(SQLModel):
     stretch_method: str = "asinh"  # asinh|auto|linear
     stretch_strength: float = 150.0
     color_calibration_enabled: bool = True
+    # Photometric Colour Calibration (Siril `pcc`) rescales each channel to
+    # match a stellar B-V catalogue.  This is appropriate for cameras with
+    # broadband response across all three channels (defiltered DSLR, dedicated
+    # OSC astro camera).  On a stock DSLR the IR-cut filter strongly
+    # attenuates Hα so the red channel carries proportionally more noise than
+    # signal; PCC then equalises noise rather than signal and washes out the
+    # nebular colour.  Default OFF for camera-agnostic safety; opt-in via the
+    # QUALITY preset or per-profile.
+    photometric_calibration_enabled: bool = False
 
     # ── Denoise ───────────────────────────────────────────────────────────────
     denoise_enabled: bool = True
@@ -117,6 +129,7 @@ PRESET_QUICK = ProcessingProfileConfig(
     gradient_removal_enabled=False,
     stretch_method="auto",
     color_calibration_enabled=False,
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.5,
     sharpen_enabled=False,
@@ -133,6 +146,7 @@ PRESET_STANDARD = ProcessingProfileConfig(
     stretch_method="asinh",
     stretch_strength=150.0,
     color_calibration_enabled=True,
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.8,
     sharpen_enabled=True,
@@ -153,6 +167,7 @@ PRESET_QUALITY = ProcessingProfileConfig(
     stretch_method="asinh",
     stretch_strength=200.0,
     color_calibration_enabled=True,
+    photometric_calibration_enabled=True,
     denoise_enabled=True,
     denoise_strength=0.9,
     sharpen_enabled=True,

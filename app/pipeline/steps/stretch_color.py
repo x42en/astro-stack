@@ -78,7 +78,7 @@ class StretchColorStep(PipelineStep):
         # failure (missing catalogue, no internet, low star count) must NOT
         # break the post-processing chain.
         wcs_solved = bool(context.metadata.get("solved", False))
-        if wcs_solved and profile_config.color_calibration_enabled:
+        if wcs_solved and profile_config.photometric_calibration_enabled:
             try:
                 async with SirilAdapter(
                     work_dir=context.work_dir / "output",
