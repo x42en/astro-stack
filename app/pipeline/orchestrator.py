@@ -88,6 +88,9 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
         if data.shape[2] == 1:
             data = data[:, :, 0]
 
+    # Replace NaN / Inf values before stretch to avoid RuntimeWarning on cast
+    data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
     lo, hi = np.percentile(data, [1.0, 99.5])
     data = np.clip((data - lo) / max(float(hi - lo), 1e-6), 0.0, 1.0)
 
@@ -420,17 +423,24 @@ class PipelineOrchestrator:
                 if has_preview:
                     step_result_payload["has_preview"] = True
 
-                await self.event_bus.publish_job_event(
-                    self.job_id,
-                    StepStatusEvent(
-                        job_id=self.job_id,
-                        session_id=self.session_id,
-                        step=step.name,
-                        step_index=step_index,
-                        status=final_status,
-                        result=step_result_payload,
-                    ),
+                step_status_event = StepStatusEvent(
+                    job_id=self.job_id,
+                    session_id=self.session_id,
+                    step=step.name,
+                    step_index=step_index,
+                    status=final_status,
+                    result=step_result_payload,
                 )
+                await self.event_bus.publish_job_event(self.job_id, step_status_event)
+
+                # Also publish to the session channel so the session WebSocket
+                # subscriber (used by the UI) receives step events including
+                # the has_preview flag — the job channel is NOT subscribed by
+                # the frontend session WS.
+                if has_preview:
+                    await self.event_bus.publish_session_event(
+                        self.session_id, step_status_event
+                    )
 
                 # Emit per-step 100% progress
                 await self.event_bus.publish_job_event(
