@@ -192,6 +192,13 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
         bayer_pattern = "".join(
             chr(raw.color_desc[top2x2[r, c]]) for r in range(2) for c in range(2)
         )
+        logger.info(
+            "raw_conversion_bayer_pattern",
+            file=str(raw_path.name),
+            bayer_pattern=bayer_pattern,
+            color_desc=raw.color_desc.decode("ascii", errors="replace"),
+            top2x2=top2x2.tolist(),
+        )
 
     # Normalise to [0.0, 1.0].  Siril's float32 FITS convention uses a
     # [0, 1] scale: values > 1.0 are clipped to 1.0 (saturated), so writing

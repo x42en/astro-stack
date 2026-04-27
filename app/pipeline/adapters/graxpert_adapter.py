@@ -160,12 +160,12 @@ class GraXpertAdapter:
         Returns:
             Command token list.
         """
-        # GraXpert CLI flags: -correction accepts 'Subtraction' or 'Division'
-        # (the mode of applying the background model, not aggressiveness).
-        # Default is Subtraction which is correct for astrophotography.
+        # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
+        # Without it the script prints usage help and exits 2.
         cmd = [
             sys.executable,
             str(script),
+            "-cli",
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),
@@ -192,8 +192,11 @@ class GraXpertAdapter:
         Returns:
             Command token list.
         """
+        # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
+        # Without it the entry-point prints usage help and exits 2.
         cmd = [
             "graxpert",
+            "-cli",
             "-cmd", "background-extraction",
             "-output", str(output_path),
             "-gpu", self._gpu_flag(),

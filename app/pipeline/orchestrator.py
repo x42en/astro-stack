@@ -87,6 +87,11 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
             data = np.moveaxis(data, 0, -1)
         if data.shape[2] == 1:
             data = data[:, :, 0]
+        elif data.shape[2] == 3:
+            # Siril stores colour FITS planes in B, G, R order (internal
+            # convention).  PIL Image.fromarray assumes the first channel is R,
+            # so reverse the channel axis to get correct R, G, B rendering.
+            data = data[:, :, ::-1].copy()
 
     # Replace NaN / Inf values before stretch to avoid RuntimeWarning on cast
     data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
