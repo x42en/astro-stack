@@ -300,6 +300,41 @@ async def cancel_processing(
     return {"message": f"Cancellation requested for job {active_job.id}."}
 
 
+@router.post(
+    "/{session_id}/reset",
+    response_model=SessionRead,
+    summary="Reset a stuck session to Ready",
+    description=(
+        "Force a session back to 'ready' status. Use when a pipeline crash leaves "
+        "the session stuck in 'processing' and the normal cancel endpoint cannot "
+        "reach the dead worker. The session can then be relaunched or deleted."
+    ),
+)
+async def reset_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> SessionRead:
+    """Force a session status back to 'ready'.
+
+    Args:
+        session_id: Session UUID.
+        db: Injected database session.
+        _user: Injected auth user.
+
+    Returns:
+        Updated :class:`~app.domain.session.SessionRead`.
+    """
+    from app.infrastructure.repositories.session_repo import SessionRepository  # noqa: PLC0415
+
+    sess_service = SessionService(db)
+    await sess_service.get_or_404(session_id)
+
+    session_repo = SessionRepository(db)
+    updated = await session_repo.update(session_id, {"status": SessionStatus.READY})
+    return SessionRead.model_validate(updated.model_dump())
+
+
 @router.delete(
     "/{session_id}/scratch",
     status_code=204,
