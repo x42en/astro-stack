@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from pathlib import Path
+from urllib.parse import unquote
 from typing import Any, Generic, Optional, TypeVar
 
 import aiofiles
@@ -130,6 +131,21 @@ async def upload_chunk(
     """
     settings = get_settings()
     service = SessionService(db)
+
+    # Free-form text headers are percent-encoded by the UI to comply with the
+    # ISO-8859-1 restriction on HTTP header values (Unicode names, em-dashes,
+    # accents…). Decode them defensively here.
+    def _decode_header(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            return unquote(value)
+        except Exception:  # pragma: no cover - unquote is very permissive
+            return value
+
+    x_session_name = _decode_header(x_session_name)
+    x_object_name = _decode_header(x_object_name)
+    x_file_name = _decode_header(x_file_name) or x_file_name
 
     # ── Resolve or create session ─────────────────────────────────────────────
     if x_session_id:
