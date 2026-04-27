@@ -87,7 +87,16 @@ class GraXpertAdapter:
         # We pass a unique stem and move the produced file to the requested
         # output_path after the run.
         output_stem = f"{input_path.stem}_GraXpertBGE"
-        produced = input_path.parent / f"{output_stem}{input_path.suffix or '.fits'}"
+        # GraXpert writes ``<output_stem>.<ext>`` next to the input. The
+        # extension is derived from GraXpert's own format detection (``.fits``
+        # or ``.xisf``) and does NOT necessarily match the input suffix — a
+        # ``.fit`` input typically yields a ``.fits`` output. We glob for the
+        # produced file *after* the run rather than guessing its name here.
+
+        # Snapshot existing siblings so we can detect what GraXpert created.
+        pre_existing = {
+            p for p in input_path.parent.glob(f"{output_stem}.*")
+        }
 
         # GraXpert can be invoked as a Python module or as an installed CLI entry-point
         graxpert_main = self.source_path / "GraXpert.py"
@@ -142,13 +151,23 @@ class GraXpertAdapter:
             )
 
         # Move the file produced next to the input to the requested output path.
-        if not produced.exists():
+        produced_candidates = sorted(
+            p
+            for p in input_path.parent.glob(f"{output_stem}.*")
+            if p.suffix.lower() in {".fits", ".fit", ".xisf"}
+            and p not in pre_existing
+        )
+        if not produced_candidates:
             raise PipelineStepException(
                 ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
-                f"GraXpert did not produce expected output: {produced}",
+                (
+                    f"GraXpert did not produce expected output "
+                    f"({output_stem}.fits/.fit/.xisf) in {input_path.parent}"
+                ),
                 step_name="gradient_removal",
                 retryable=False,
             )
+        produced = produced_candidates[0]
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if output_path.exists():
             output_path.unlink()
