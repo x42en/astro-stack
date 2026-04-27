@@ -63,7 +63,7 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
                 .limit(limit)
             )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_by_name_for_user(
         self,
@@ -86,4 +86,70 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
             ProcessingProfile.owner_user_id == owner_user_id,
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
+
+    async def list_visible_to(
+        self,
+        user_id: Optional[uuid.UUID],
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[ProcessingProfile]:
+        """Return profiles visible to ``user_id``.
+
+        Visibility rules:
+        * In anonymous mode (``user_id is None``) every profile is returned.
+        * Otherwise: profiles owned by the user, profiles flagged as shared,
+          and unowned (system) profiles are returned.
+        """
+        stmt = select(ProcessingProfile)
+        if user_id is not None:
+            stmt = stmt.where(
+                (ProcessingProfile.owner_user_id == user_id)
+                | (ProcessingProfile.is_shared.is_(True))  # type: ignore[union-attr]
+                | (ProcessingProfile.owner_user_id.is_(None))  # type: ignore[union-attr]
+            )
+        stmt = (
+            stmt.order_by(ProcessingProfile.name)  # type: ignore[attr-defined]
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def find_available_name(
+        self,
+        base_name: str,
+        owner_user_id: Optional[uuid.UUID],
+    ) -> str:
+        """Return ``base_name`` or a suffixed variant that does not collide.
+
+        Tries ``base_name``, then ``"{base_name} (imported)"`` and
+        ``"{base_name} (imported N)"`` (N starting at 2) until an unused
+        name is found.  Collision is checked within the user's scope.
+        """
+        candidate = base_name
+        existing = await self._exists_for_owner(candidate, owner_user_id)
+        if not existing:
+            return candidate
+        candidate = f"{base_name} (imported)"
+        if not await self._exists_for_owner(candidate, owner_user_id):
+            return candidate
+        n = 2
+        while True:
+            candidate = f"{base_name} (imported {n})"
+            if not await self._exists_for_owner(candidate, owner_user_id):
+                return candidate
+            n += 1
+
+    async def _exists_for_owner(
+        self,
+        name: str,
+        owner_user_id: Optional[uuid.UUID],
+    ) -> bool:
+        stmt = select(ProcessingProfile).where(ProcessingProfile.name == name)
+        if owner_user_id is None:
+            stmt = stmt.where(ProcessingProfile.owner_user_id.is_(None))  # type: ignore[union-attr]
+        else:
+            stmt = stmt.where(ProcessingProfile.owner_user_id == owner_user_id)
+        result = await self.session.execute(stmt)
+        return result.scalars().first() is not None

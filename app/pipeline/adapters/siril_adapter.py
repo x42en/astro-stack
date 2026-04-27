@@ -118,7 +118,7 @@ class SirilAdapter:
         self._in_pipe: Optional[str] = None
         self._out_pipe: Optional[str] = None
         self._out_file: Optional[asyncio.StreamReader] = None
-        self._in_file: Optional[asyncio.StreamWriter] = None
+        self._in_transport: Optional[asyncio.WriteTransport] = None
         self._settings = get_settings()
 
     async def __aenter__(self) -> "SirilAdapter":
@@ -192,8 +192,8 @@ class SirilAdapter:
             self._open_pipe_reader(self._out_pipe),
             timeout=15.0,
         )
-        # Open in pipe for writing
-        self._in_file = await asyncio.wait_for(
+        # Open in pipe for writing — returns the write transport directly
+        self._in_transport = await asyncio.wait_for(
             self._open_pipe_writer(self._in_pipe),
             timeout=15.0,
         )
@@ -208,13 +208,13 @@ class SirilAdapter:
         Closes named pipes and cleans up the process handle.
         """
         try:
-            if self._in_file is not None:
+            if self._in_transport is not None:
                 try:
                     await self.send_command("exit")
                 except Exception:  # noqa: BLE001
                     pass
-                self._in_file.close()
-                self._in_file = None
+                self._in_transport.close()
+                self._in_transport = None
         finally:
             if self._process is not None:
                 try:
@@ -235,11 +235,9 @@ class SirilAdapter:
         Raises:
             RuntimeError: If the adapter has not been started.
         """
-        if self._in_file is None:
+        if self._in_transport is None:
             raise RuntimeError("SirilAdapter not started.")
-        line = f"{command}\n"
-        self._in_file.write(line.encode())
-        await self._in_file.drain()
+        self._in_transport.write(f"{command}\n".encode())
         logger.debug("siril_command_sent", command=command)
 
     async def run_command(
@@ -270,20 +268,62 @@ class SirilAdapter:
         async def _collect() -> None:
             async for event in self.stream_output():
                 collected.append(event)
-                if event.event_type == SirilEventType.STATUS:
-                    if event.command_name.lower() == cmd_name or event.status_verb in (
-                        "success",
-                        "error",
-                    ):
-                        if event.status_verb == "error":
+                if event.event_type == SirilEventType.LOG:
+                    logger.debug("siril_log", command=command, message=event.message)
+                if event.event_type != SirilEventType.STATUS:
+                    continue
+                # "starting" is informational only — keep collecting
+                if event.status_verb == "starting":
+                    continue
+                # Match by command name when available; fall back to any terminal status
+                name_ok = (
+                    event.command_name.lower() == cmd_name
+                    if event.command_name
+                    else True
+                )
+                if name_ok or event.status_verb in ("success", "error"):
+                    if event.status_verb == "error":
+                        # Collect all preceding log messages for context
+                        log_context = [e.message for e in collected if e.event_type == SirilEventType.LOG]
+                        # Disk-full is a permanent failure — retrying cannot free space.
+                        # Detect it before raising so the orchestrator stops immediately
+                        # instead of burning all retry attempts.
+                        is_disk_full = any(
+                            "not enough free disk space" in msg.lower()
+                            for msg in log_context
+                        )
+                        if is_disk_full:
+                            raise PipelineStepException(
+                                ErrorCode.PIPE_DISK_FULL,
+                                f"Siril aborted: not enough disk space for '{command}'.",
+                                step_name=cmd_name,
+                                retryable=False,
+                                details={"command": command, "siril_log": log_context},
+                            )
+                        # "Unknown parameter" means the installed Siril version does
+                        # not recognise a flag we sent. This is a configuration error —
+                        # retrying will never help. Fail immediately so the session is
+                        # marked FAILED right away instead of burning all retry attempts.
+                        is_unknown_param = any(
+                            "unknown parameter" in msg.lower()
+                            for msg in log_context
+                        )
+                        if is_unknown_param:
                             raise PipelineStepException(
                                 ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
-                                f"Siril command '{command}' failed: {event.message}",
+                                f"Siril command '{command}' failed: unsupported parameter (check Siril version). {event.message}",
                                 step_name=cmd_name,
-                                retryable=True,
-                                details={"command": command, "siril_message": event.message},
+                                retryable=False,
+                                details={"command": command, "siril_message": event.message, "siril_log": log_context},
                             )
-                        return
+                        raise PipelineStepException(
+                            ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
+                            f"Siril command '{command}' failed: {event.message}",
+                            step_name=cmd_name,
+                            retryable=True,
+                            details={"command": command, "siril_message": event.message, "siril_log": log_context},
+                        )
+                    return
 
         await asyncio.wait_for(_collect(), timeout=timeout)
         return collected
@@ -349,22 +389,30 @@ class SirilAdapter:
         return reader
 
     @staticmethod
-    async def _open_pipe_writer(path: str) -> asyncio.StreamWriter:
+    async def _open_pipe_writer(path: str) -> asyncio.WriteTransport:
         """Open a named pipe for async writing.
+
+        Returns the raw write transport — avoids the asyncio.StreamWriter
+        dependency on ``_drain_helper`` which is absent on BaseProtocol.
 
         Args:
             path: Absolute path to the named pipe.
 
         Returns:
-            An :class:`asyncio.StreamWriter` bound to the pipe.
+            An :class:`asyncio.WriteTransport` bound to the pipe.
         """
         loop = asyncio.get_event_loop()
         fd = await loop.run_in_executor(None, lambda: os.open(path, os.O_WRONLY))
-        transport, protocol = await loop.connect_write_pipe(
-            asyncio.BaseProtocol, os.fdopen(fd, "wb", 0)
-        )
-        writer = asyncio.StreamWriter(transport, protocol, None, loop)  # type: ignore[arg-type]
-        return writer
+
+        class _NullProtocol(asyncio.BaseProtocol):
+            def connection_made(self, transport: asyncio.BaseTransport) -> None:  # noqa: D401
+                pass
+
+            def connection_lost(self, exc: Optional[Exception]) -> None:  # noqa: D401
+                pass
+
+        transport, _ = await loop.connect_write_pipe(_NullProtocol, os.fdopen(fd, "wb", 0))
+        return transport  # type: ignore[return-value]
 
     def _cleanup_pipes(self) -> None:
         """Remove the named pipe files if they exist."""

@@ -47,22 +47,46 @@ class PlateSolvingStep(PipelineStep):
         """
         if not config.get("plate_solving_enabled", True):
             return StepResult(
-                success=True, skipped=True, message="Plate solving disabled in profile."
+                success=True, skipped=True, message="Plate solving disabled in profile.",
+                metadata={"preview_url": f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"},
             )
 
         if context.stacked_fits_path is None:
             logger.warning("plate_solving_skipped", reason="no stacked FITS in context")
             return StepResult(success=True, skipped=True, message="No stacked FITS available.")
 
+        target_ra = context.metadata.get("target_ra")
+        target_dec = context.metadata.get("target_dec")
         result = await self._adapter.solve(
             fits_path=context.stacked_fits_path,
-            search_radius_deg=float(config.get("plate_solving_radius_deg", 30.0)),
+            search_radius_deg=float(config.get("plate_solving_radius_deg", 180.0)),
             speed=str(config.get("plate_solving_speed", "auto")),
+            target_ra_deg=float(target_ra) if target_ra is not None else None,
+            target_dec_deg=float(target_dec) if target_dec is not None else None,
         )
 
         context.metadata.update(result)
-        logger.info("plate_solving_done", ra=result.get("ra"), dec=result.get("dec"))
 
+        if not result.get("solved", False):
+            # ASTAP returned exit 1 — no solution found.  This is not a
+            # pipeline error: the job continues without WCS coordinates.
+            logger.warning(
+                "plate_solving_no_solution",
+                fits=str(context.stacked_fits_path),
+            )
+            result["preview_url"] = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
+            return StepResult(
+                success=True,
+                metadata=result,
+                message=(
+                    "Plate solving: no solution found "
+                    "(catalog missing or insufficient stars) — pipeline continues."
+                ),
+            )
+
+        logger.info("plate_solving_done", ra=result.get("ra"), dec=result.get("dec"))
+        # Plate solving does not produce a new FITS; reuse the preprocessing preview.
+        result["preview_url"] = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
         return StepResult(
             success=True,
             metadata=result,

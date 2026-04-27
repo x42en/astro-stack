@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import Boolean, DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlmodel import Column, Field, SQLModel
 
@@ -42,6 +42,9 @@ class ProcessingProfileConfig(SQLModel):
         stretch_method: Stretch algorithm applied after stacking.
         stretch_strength: Strength parameter for asinh stretch.
         color_calibration_enabled: Whether to run photometric color calibration.
+        photometric_calibration_enabled: Whether to run Siril ``pcc`` (requires
+            plate-solve).  Recommended only for defiltered/OSC astro cameras;
+            on stock DSLR it tends to neutralise residual H\u03b1.
         denoise_enabled: Whether to run Cosmic Clarity Denoise.
         denoise_strength: Denoise strength (0.0–1.0).
         denoise_luminance_only: Apply denoise to luminance channel only.
@@ -59,7 +62,7 @@ class ProcessingProfileConfig(SQLModel):
     """
 
     # ── Stacking ──────────────────────────────────────────────────────────────
-    rejection_algorithm: str = "sigma"  # sigma|winsorized|linear|none
+    rejection_algorithm: str = "winsorized"  # sigma|winsorized|linear|none
     rejection_low: float = 3.0
     rejection_high: float = 3.0
     normalization: str = "addscale"  # addscale|mulscale|none
@@ -70,18 +73,27 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Plate solving ─────────────────────────────────────────────────────────
     plate_solving_enabled: bool = True
-    plate_solving_radius_deg: float = 30.0
+    plate_solving_radius_deg: float = 180.0
     plate_solving_speed: str = "auto"  # auto|slow|fast
 
     # ── Gradient removal ──────────────────────────────────────────────────────
     gradient_removal_enabled: bool = True
     gradient_removal_method: str = "ai"  # ai|polynomial
-    gradient_removal_ai_model: str = "GraXpert-AI-1.0.0"
+    gradient_removal_ai_model: str = "1.0.1"
 
-    # ── Stretch & colour ──────────────────────────────────────────────────────
+    # ── Stretch & colour ─────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear
-    stretch_strength: float = 0.002
+    stretch_strength: float = 150.0
     color_calibration_enabled: bool = True
+    # Photometric Colour Calibration (Siril `pcc`) rescales each channel to
+    # match a stellar B-V catalogue.  This is appropriate for cameras with
+    # broadband response across all three channels (defiltered DSLR, dedicated
+    # OSC astro camera).  On a stock DSLR the IR-cut filter strongly
+    # attenuates Hα so the red channel carries proportionally more noise than
+    # signal; PCC then equalises noise rather than signal and washes out the
+    # nebular colour.  Default OFF for camera-agnostic safety; opt-in via the
+    # QUALITY preset or per-profile.
+    photometric_calibration_enabled: bool = False
 
     # ── Denoise ───────────────────────────────────────────────────────────────
     denoise_enabled: bool = True
@@ -90,8 +102,8 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Sharpen ───────────────────────────────────────────────────────────────
     sharpen_enabled: bool = True
-    sharpen_stellar_amount: float = 0.5
-    sharpen_nonstellar_amount: float = 0.7
+    sharpen_stellar_amount: float = 0.3
+    sharpen_nonstellar_amount: float = 0.4
     sharpen_radius: int = 2
 
     # ── Super-resolution ──────────────────────────────────────────────────────
@@ -117,6 +129,7 @@ PRESET_QUICK = ProcessingProfileConfig(
     gradient_removal_enabled=False,
     stretch_method="auto",
     color_calibration_enabled=False,
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.5,
     sharpen_enabled=False,
@@ -129,13 +142,16 @@ PRESET_STANDARD = ProcessingProfileConfig(
     drizzle_enabled=False,
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
+    gradient_removal_method="ai",
     stretch_method="asinh",
+    stretch_strength=150.0,
     color_calibration_enabled=True,
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.8,
     sharpen_enabled=True,
-    sharpen_stellar_amount=0.5,
-    sharpen_nonstellar_amount=0.7,
+    sharpen_stellar_amount=0.3,
+    sharpen_nonstellar_amount=0.4,
     super_resolution_enabled=False,
     star_separation_enabled=False,
 )
@@ -147,8 +163,13 @@ PRESET_QUALITY = ProcessingProfileConfig(
     drizzle_pixfrac=0.7,
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
+    gradient_removal_method="ai",
     stretch_method="asinh",
+    stretch_strength=200.0,
     color_calibration_enabled=True,
+    # OFF by default even on QUALITY: PCC tends to neutralise residual Hα on
+    # stock DSLR.  Users with defiltered/OSC astro cameras can opt-in per profile.
+    photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.9,
     sharpen_enabled=True,
@@ -221,6 +242,26 @@ class ProcessingProfile(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
     )
+
+    # Sharing: when ``is_shared`` is True the profile is visible (read-only)
+    # to every authenticated user via ``GET /profiles``.  Other users may
+    # duplicate it to obtain an editable private copy.  ``shared_at`` is
+    # stamped on the first toggle and never cleared automatically.
+    is_shared: bool = Field(
+        default=False,
+        sa_column=Column(
+            "is_shared",
+            Boolean(),
+            nullable=False,
+            index=True,
+            server_default="false",
+        ),
+    )
+    shared_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -258,6 +299,13 @@ class ProcessingProfileRead(SQLModel):
 
     Attributes:
         id: Profile UUID.
+        owner_user_id: ID of the owner; ``None`` for anonymous-mode or system
+            profiles.
+        is_shared: Whether the profile is publicly visible to other
+            authenticated users.
+        shared_at: Timestamp of the first share.
+        is_owner: True when the requesting user owns this profile (or when
+            running in anonymous/no-auth mode).  Computed server-side.
         name: Display name.
         description: Optional description.
         config: Parameter set as dict.
@@ -266,6 +314,10 @@ class ProcessingProfileRead(SQLModel):
     """
 
     id: uuid.UUID
+    owner_user_id: Optional[uuid.UUID] = None
+    is_shared: bool = False
+    shared_at: Optional[datetime] = None
+    is_owner: bool = True
     name: str
     description: Optional[str]
     config: dict[str, Any]

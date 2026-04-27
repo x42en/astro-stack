@@ -11,6 +11,7 @@ from app.infrastructure.queue.events_bus import EventBus
 from app.pipeline.adapters.siril_adapter import SirilAdapter, SirilEventType
 from app.pipeline.adapters.siril_script_builder import SirilScriptBuilder
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -71,10 +72,37 @@ class StretchColorStep(PipelineStep):
             frames={},
             work_dir=context.work_dir / "output",
         )
+
+        # Photometric Colour Calibration (PCC) — runs only if plate-solving
+        # produced WCS headers in the FITS. Tolerated as best-effort: a PCC
+        # failure (missing catalogue, no internet, low star count) must NOT
+        # break the post-processing chain.
+        wcs_solved = bool(context.metadata.get("solved", False))
+        if wcs_solved and profile_config.photometric_calibration_enabled:
+            try:
+                async with SirilAdapter(
+                    work_dir=context.work_dir / "output",
+                    pipe_dir=context.work_dir / "pipes_pcc",
+                ) as siril:
+                    for command in builder.build_pcc_commands():
+                        if context.cancelled:
+                            break
+                        await siril.run_command(command, timeout=180.0)
+                # PCC saves back to for_stretch.fit; promote to .fits so the
+                # stretch script that follows reloads the calibrated image.
+                import os  # noqa: PLC0415
+
+                pcc_out = context.work_dir / "output" / "for_stretch.fit"
+                if pcc_out.exists():
+                    os.replace(str(pcc_out), str(siril_input))
+                logger.info("siril_pcc_done")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("siril_pcc_failed", error=str(exc))
+
         commands = builder.build_postprocessing_commands()
 
         if not commands:
-            context.background_removed_path = input_path
+            context.stretched_fits_path = input_path
             return StepResult(
                 success=True, skipped=True, message="No stretch commands for this profile."
             )
@@ -99,11 +127,32 @@ class StretchColorStep(PipelineStep):
                         )
                         await self.event_bus.publish_job_event(context.job_id, ws_log)
 
+        # Siril's `save` command writes <name>.fit (without the trailing 's').
+        # Rename the output to .fits so subsequent steps can consume it correctly.
+        import os  # noqa: PLC0415
+
+        siril_out_fit = context.work_dir / "output" / "for_stretch.fit"
+        if siril_out_fit.exists():
+            os.replace(str(siril_out_fit), str(siril_input))
+
         stretched_path = context.work_dir / "output" / "for_stretch.fits"
+        context.stretched_fits_path = stretched_path
         logger.info("stretch_color_done", output=str(stretched_path))
+
+        # Generate a JPEG preview from the stretched image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "stretch_color.jpg"
+            await save_step_preview(stretched_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/stretch_color"
+        except Exception:  # noqa: BLE001
+            logger.warning("stretch_color_preview_failed")
 
         return StepResult(
             success=True,
-            metadata={"stretched_fits_path": str(stretched_path)},
+            metadata={
+                "stretched_fits_path": str(stretched_path),
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message="Stretch and colour calibration complete.",
         )

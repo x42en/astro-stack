@@ -76,7 +76,10 @@ class Settings(BaseSettings):
 
     # ── External tool binaries ────────────────────────────────────────────────
     siril_binary: str = "siril-cli"
-    astap_binary: str = "astap"
+    # astap_cli is the headless command-line solver (no GTK / no display
+    # required).  The standard "astap" GUI binary fails in Docker with
+    # "Gtk-WARNING: cannot open display".  Both accept identical CLI flags.
+    astap_binary: str = "astap_cli"
     astap_star_db_path: str = "/opt/astap/stars"
 
     # ── GPU ───────────────────────────────────────────────────────────────────
@@ -89,7 +92,8 @@ class Settings(BaseSettings):
 
     # ── GraXpert ──────────────────────────────────────────────────────────────
     graxpert_source_path: str = "/opt/graxpert"
-    graxpert_ai_model: str = "GraXpert-AI-1.0.0"
+    # AI model version (must match GraXpert's regex ^\d+\.\d+\.\d+$).
+    graxpert_ai_model: str = "1.0.1"
 
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"

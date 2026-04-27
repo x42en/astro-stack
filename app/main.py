@@ -14,6 +14,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware.error_handler import register_error_handlers
+from app.api.v1.catalog import router as catalog_router
+from app.api.v1.gallery import router as gallery_router
 from app.api.v1.jobs import router as jobs_router
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.sessions import router as sessions_router
@@ -91,7 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     frame_count_darks=session.frame_count_darks,
                     frame_count_flats=session.frame_count_flats,
                     frame_count_bias=session.frame_count_bias,
-                    input_format=session.input_format.value if session.input_format else "fits",
+                    input_format=session.input_format if session.input_format else "fits",
                 )
                 await event_bus.publish_session_event(session.id, event)
             except Exception as exc:  # noqa: BLE001
@@ -152,21 +154,33 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(profiles_router, prefix="/api/v1")
+    app.include_router(catalog_router, prefix="/api/v1")
+    app.include_router(gallery_router, prefix="/api/v1")
     app.include_router(ws_router)
 
     # ── Health check ──────────────────────────────────────────────────────────
-    @app.get("/health", tags=["health"], summary="Health check")
-    async def health_check() -> dict:
-        """Return application health status.
-
-        Returns:
-            Dict with ``status``, ``version``, and ``app_name``.
-        """
+    # Exposed on two paths:
+    #   /health        — used by Docker HEALTHCHECK and Traefik infra probes
+    #   /api/v1/health — used by the frontend Settings page (axios baseURL = /api/v1)
+    def _health_body() -> dict:
         return {
             "status": "ok",
             "version": settings.app_version,
             "app_name": settings.app_name,
         }
+
+    @app.get("/health", tags=["health"], summary="Health check", include_in_schema=False)
+    async def health_check() -> dict:
+        return _health_body()
+
+    @app.get("/api/v1/health", tags=["health"], summary="Health check (v1)")
+    async def health_check_v1() -> dict:
+        """Return application health status.
+
+        Returns:
+            Dict with ``status``, ``version``, and ``app_name``.
+        """
+        return _health_body()
 
     return app
 

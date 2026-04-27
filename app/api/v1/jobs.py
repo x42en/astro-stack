@@ -112,3 +112,44 @@ async def download_fits(
         media_type="application/octet-stream",
         filename=f"final_{job_id}.fits",
     )
+
+
+@router.get(
+    "/{job_id}/output/tiff",
+    summary="Download high-quality 16-bit TIFF",
+)
+async def download_tiff(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> FileResponse:
+    """Stream the final 16-bit TIFF rendition for a completed job.
+
+    The TIFF is produced from the same processed image as the JPEG preview,
+    with the export-time HDR polish applied (midtone S-curve, highlight
+    rolloff, and saturation boost). 16-bit depth + Deflate compression keeps
+    the file editable in Photoshop, GIMP, Krita, Affinity Photo, and Apple
+    Preview / Windows Photos without further conversion.
+
+    Args:
+        job_id: Pipeline job UUID.
+        db: Injected database session.
+        _user: Injected auth user.
+
+    Returns:
+        :class:`~fastapi.responses.FileResponse` with the TIFF file.
+    """
+    service = JobService(db)
+    job_read = await service.get_job_with_steps(job_id)
+
+    if not job_read.output_tiff_path:
+        raise NotFoundException(
+            ErrorCode.PIPE_EXPORT_FAILED,
+            f"TIFF output not available for job '{job_id}'.",
+        )
+
+    return FileResponse(
+        path=job_read.output_tiff_path,
+        media_type="image/tiff",
+        filename=f"final_{job_id}.tiff",
+    )

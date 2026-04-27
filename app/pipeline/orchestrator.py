@@ -34,16 +34,78 @@ from app.domain.ws_event import (
     CompletedEvent,
     ErrorEvent,
     ProgressEvent,
+    SessionStatusEvent,
     StepStatusEvent,
     StepStatusValue,
 )
+from app.domain.session import SessionStatus
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository, JobStepRepository
+from app.infrastructure.repositories.session_repo import SessionRepository
 from app.infrastructure.storage.file_store import FileStore
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
 from app.pipeline.retry import RetryPolicy
 
 logger = get_logger(__name__)
+
+
+def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
+    """Render a processed FITS image to a JPEG preview (sync, run in thread).
+
+    Delegates to the shared display stretch in
+    :mod:`app.pipeline.utils.display` so that step previews and the final
+    export use identical rendering parameters.
+
+    Args:
+        fits_path: Source FITS file produced by a pipeline step.
+        output_path: Destination JPEG path (parent directory is created if needed).
+    """
+    import io as _io  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from PIL import Image  # noqa: PLC0415
+
+    from app.pipeline.utils.display import (  # noqa: PLC0415
+        load_fits_display_rgb,
+        to_uint8,
+    )
+
+    output_path = _Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        data = load_fits_display_rgb(fits_path)
+    except ValueError:
+        logger.warning("fits_preview_no_data", path=str(fits_path))
+        return
+
+    arr_8 = to_uint8(data)
+    img = (
+        Image.fromarray(arr_8, mode="L").convert("RGB")
+        if arr_8.ndim == 2
+        else Image.fromarray(arr_8, mode="RGB")
+    )
+    img.thumbnail((900, 900), Image.LANCZOS)
+
+    buf = _io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    output_path.write_bytes(buf.getvalue())
+
+# Ordered pipeline step plan — (machine_name, display_name).
+# Used by the API to return all planned steps (including pending ones) in the
+# job response so the frontend can show the full checklist from the start.
+PIPELINE_STEP_PLAN: tuple[tuple[str, str], ...] = (
+    ("raw_conversion", "RAW → FITS Conversion"),
+    ("preprocessing", "Calibration & Stacking (Siril)"),
+    ("plate_solving", "Plate Solving (ASTAP)"),
+    ("gradient_removal", "Background Gradient Removal (GraXpert)"),
+    ("stretch_color", "Stretch & Colour Calibration (Siril)"),
+    ("denoise", "AI Noise Reduction (Cosmic Clarity)"),
+    ("sharpen", "AI Sharpening / Deconvolution (Cosmic Clarity)"),
+    ("super_resolution", "AI Super-Resolution 2× (Cosmic Clarity)"),
+    ("star_separation", "Star Separation (Cosmic Clarity Dark Star)"),
+    ("export", "Export (FITS / TIFF / JPEG / Thumbnail)"),
+)
 
 
 class PipelineOrchestrator:
@@ -93,7 +155,60 @@ class PipelineOrchestrator:
 
         self._job_repo = JobRepository(db_session)
         self._step_repo = JobStepRepository(db_session)
+        self._session_repo = SessionRepository(db_session)
         self._file_store = FileStore()
+
+    # ── Step preview generation ───────────────────────────────────────────────
+
+    # Steps that produce a FITS output worth previewing, mapped to the context
+    # attribute that holds the output path.
+    _PREVIEW_STEPS: dict[str, str] = {
+        "preprocessing": "stacked_fits_path",
+        "gradient_removal": "background_removed_path",
+        "stretch_color": "stretched_fits_path",
+        "denoise": "denoised_path",
+        "sharpen": "sharpened_path",
+        "super_resolution": "superres_path",
+    }
+
+    async def _maybe_generate_step_preview(
+        self, step_name: str, context: PipelineContext
+    ) -> bool:
+        """Generate a JPEG step preview if the step produced a FITS output.
+
+        Runs the rendering in a background thread so it does not block the
+        event loop. The result is cached as a JPEG under the output directory.
+
+        Args:
+            step_name: Machine name of the completed step.
+            context: Current pipeline context containing output paths.
+
+        Returns:
+            ``True`` if a preview was generated successfully, ``False`` otherwise.
+        """
+        import asyncio  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
+
+        attr = self._PREVIEW_STEPS.get(step_name)
+        if attr is None:
+            return False
+
+        fits_path: Path | None = getattr(context, attr, None)
+        if fits_path is None or not fits_path.exists():
+            return False
+
+        preview_path = self._file_store.step_preview_path(self.session_id, step_name)
+        try:
+            await asyncio.to_thread(_fits_to_preview_jpeg, fits_path, preview_path)
+            logger.info(
+                "step_preview_generated",
+                step=step_name,
+                preview=str(preview_path),
+            )
+            return True
+        except Exception:  # noqa: BLE001
+            logger.warning("step_preview_failed", step=step_name, exc_info=True)
+            return False
 
     async def run(self) -> dict[str, Any]:
         """Execute all pipeline steps in sequence, with retry and resume support.
@@ -110,8 +225,20 @@ class PipelineOrchestrator:
         """
         started_at = datetime.now(tz=timezone.utc)
 
-        # Mark job as running
+        # Mark job as running and persist session status to DB
         await self._job_repo.update_status(self.job_id, JobStatus.RUNNING)
+        await self._session_repo.update(
+            self.session_id, {"status": SessionStatus.PROCESSING.value}
+        )
+
+        # Notify clients that the session is now processing
+        processing_event = SessionStatusEvent(
+            session_id=self.session_id,
+            new_status="processing",
+            job_status="running",
+        )
+        await self.event_bus.publish_session_event(self.session_id, processing_event)
+        await self.event_bus.publish_broadcast(processing_event)
 
         # Build context
         context = PipelineContext(
@@ -135,6 +262,9 @@ class PipelineOrchestrator:
         existing_steps = {s.step_name: s for s in await self._step_repo.list_by_job(self.job_id)}
 
         config_dict = self.profile_config.model_dump()
+        # Expose the active profile config to downstream steps (notably the
+        # ExportStep which embeds it into output metadata / badges).
+        context.metadata["profile_config"] = config_dict
         final_outputs: dict[str, Any] = {}
 
         for step_index, step in enumerate(steps):
@@ -184,9 +314,24 @@ class PipelineOrchestrator:
             job_id=self.job_id,
             session_id=self.session_id,
             duration_seconds=duration,
-            outputs=final_outputs,
+            outputs={k: v for k, v in final_outputs.items() if isinstance(v, str)},
         )
         await self.event_bus.publish_job_event(self.job_id, completed_event)
+
+        # Persist completed status to DB, then notify clients
+        await self._session_repo.update(
+            self.session_id, {"status": SessionStatus.COMPLETED.value}
+        )
+
+        # Notify the session channel and broadcast so all clients can refresh
+        status_event = SessionStatusEvent(
+            session_id=self.session_id,
+            new_status="completed",
+            job_status="completed",
+        )
+        await self.event_bus.publish_session_event(self.session_id, status_event)
+        await self.event_bus.publish_broadcast(status_event)
+
         logger.info("pipeline_completed", job_id=str(self.job_id), duration=duration)
 
         return final_outputs
@@ -259,17 +404,35 @@ class PipelineOrchestrator:
                 final_status = (
                     StepStatusValue.SKIPPED if result.skipped else StepStatusValue.SUCCESS
                 )
-                await self.event_bus.publish_job_event(
-                    self.job_id,
-                    StepStatusEvent(
-                        job_id=self.job_id,
-                        session_id=self.session_id,
-                        step=step.name,
-                        step_index=step_index,
-                        status=final_status,
-                        result=result.metadata,
-                    ),
+
+                # For steps that produce a FITS output, generate a JPEG preview
+                # in a background thread so the client can show incremental renders.
+                has_preview = False
+                if not result.skipped:
+                    has_preview = await self._maybe_generate_step_preview(step.name, context)
+
+                step_result_payload: dict[str, Any] = dict(result.metadata)
+                if has_preview:
+                    step_result_payload["has_preview"] = True
+
+                step_status_event = StepStatusEvent(
+                    job_id=self.job_id,
+                    session_id=self.session_id,
+                    step=step.name,
+                    step_index=step_index,
+                    status=final_status,
+                    result=step_result_payload,
                 )
+                await self.event_bus.publish_job_event(self.job_id, step_status_event)
+
+                # Also publish to the session channel so the session WebSocket
+                # subscriber (used by the UI) receives step events including
+                # the has_preview flag — the job channel is NOT subscribed by
+                # the frontend session WS.
+                if has_preview:
+                    await self.event_bus.publish_session_event(
+                        self.session_id, step_status_event
+                    )
 
                 # Emit per-step 100% progress
                 await self.event_bus.publish_job_event(
@@ -295,6 +458,9 @@ class PipelineOrchestrator:
                     attempt=attempt,
                     error_code=exc.error_code.value,
                     message=exc.message,
+                    siril_log=(
+                        exc.details.get("siril_log") if exc.details else None
+                    ),
                 )
 
                 error_event = ErrorEvent(
@@ -310,7 +476,10 @@ class PipelineOrchestrator:
                 )
                 await self.event_bus.publish_job_event(self.job_id, error_event)
 
-                if not self.retry_policy.should_retry(exc.error_code, attempt):
+                # Stop immediately if the exception is explicitly non-retryable
+                # (e.g. unsupported Siril parameter, disk full) regardless of
+                # the error-code-level retry policy.
+                if not exc.retryable or not self.retry_policy.should_retry(exc.error_code, attempt):
                     break
 
                 await self._upsert_step(
@@ -451,7 +620,7 @@ class PipelineOrchestrator:
         result = await self.db_session.execute(
             select(AstroSession).where(AstroSession.id == self.session_id)
         )
-        session_record = result.first()
+        session_record = result.scalars().first()
         if session_record is None:
             return
 
@@ -461,6 +630,11 @@ class PipelineOrchestrator:
 
         context.metadata["frames"] = frames
         context.metadata["input_format"] = input_format
+        # Make user-supplied target hint available to the plate-solving step.
+        # Stored as raw floats (J2000 decimal degrees) or None.
+        context.metadata["target_ra"] = session_record.target_ra
+        context.metadata["target_dec"] = session_record.target_dec
+        context.metadata["object_name_hint"] = session_record.object_name
 
     @staticmethod
     def _restore_context_paths(

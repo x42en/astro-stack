@@ -69,7 +69,7 @@ class BaseRepository(ABC, Generic[ModelT]):
         """
         stmt = select(self.model).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def create(self, instance: ModelT) -> ModelT:
         """Persist a new record to the database.
@@ -103,7 +103,7 @@ class BaseRepository(ABC, Generic[ModelT]):
         if instance is None:
             return None
         for field, value in data.items():
-            if value is not None and hasattr(instance, field):
+            if hasattr(instance, field):
                 setattr(instance, field, value)
         self.session.add(instance)
         await self.session.commit()

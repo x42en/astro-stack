@@ -26,8 +26,9 @@ dependencies = [
     # Redis pub/sub
     "redis[hiredis]>=5.0.0",
     # Config
-    "pydantic>=2.7.0",
+    "pydantic[email]>=2.7.0",
     "pydantic-settings>=2.3.0",
+    "email-validator>=2.1.0",
     # Auth
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
@@ -38,6 +39,8 @@ dependencies = [
     "rawpy>=0.22.0",
     "numpy>=1.26.0",
     "Pillow>=10.3.0",
+    # EXIF extraction from camera RAW files (NEF/CR2/ARW/DNG) — pure-python
+    "ExifRead>=3.0.0",
     # File watching
     "watchdog>=4.0.0",
     # Utilities

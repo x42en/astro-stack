@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 
 from app.domain.session import AstroSession, SessionStatus
@@ -36,7 +36,7 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(AstroSession).where(AstroSession.inbox_path == inbox_path)
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def count_all(self, search: str | None = None) -> int:
         """Return the total count of all sessions, optionally filtered by name search.
@@ -49,7 +49,13 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(func.count(AstroSession.id))  # type: ignore[arg-type]
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -64,10 +70,16 @@ class SessionRepository(BaseRepository[AstroSession]):
             Total matching session count.
         """
         stmt = select(func.count(AstroSession.id)).where(  # type: ignore[arg-type]
-            AstroSession.status == status
+            AstroSession.status == status.value
         )
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -89,12 +101,18 @@ class SessionRepository(BaseRepository[AstroSession]):
         Returns:
             List of matching sessions, ordered by creation time descending.
         """
-        stmt = select(AstroSession).where(AstroSession.status == status)
+        stmt = select(AstroSession).where(AstroSession.status == status.value)
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def list_all_ordered(
         self,
@@ -114,10 +132,16 @@ class SessionRepository(BaseRepository[AstroSession]):
         """
         stmt = select(AstroSession)
         if search:
-            stmt = stmt.where(AstroSession.name.ilike(f"%{search}%"))  # type: ignore[union-attr]
+            pattern = f"%{search}%"
+            stmt = stmt.where(
+                or_(
+                    AstroSession.name.ilike(pattern),  # type: ignore[union-attr]
+                    AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
+                )
+            )
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def update_status(
         self,

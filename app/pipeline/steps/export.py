@@ -16,6 +16,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
 from app.core.errors import ErrorCode, PipelineStepException
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -74,11 +75,22 @@ class ExportStep(PipelineStep):
         thumb_out = out_dir / "thumbnail.png"
 
         try:
-            # Copy FITS as-is
-            await loop.run_in_executor(_EXECUTOR, _copy_fits, source_fits, fits_out)
-            # Export raster formats
+            # Profile config dict — already injected by the orchestrator into
+            # context.metadata; falls back to the raw config the step receives.
+            profile_config = context.metadata.get("profile_config") or config
+            # Copy FITS as-is, then stamp with provenance HISTORY cards.
             await loop.run_in_executor(
-                _EXECUTOR, _export_raster, source_fits, tiff_out, jpeg_out, thumb_out
+                _EXECUTOR, _copy_fits, source_fits, fits_out, profile_config
+            )
+            # Export raster formats (TIFF tags + JPEG badge embedded).
+            await loop.run_in_executor(
+                _EXECUTOR,
+                _export_raster,
+                source_fits,
+                tiff_out,
+                jpeg_out,
+                thumb_out,
+                profile_config,
             )
         except Exception as exc:  # noqa: BLE001
             raise PipelineStepException(
@@ -96,6 +108,15 @@ class ExportStep(PipelineStep):
             jpeg=str(jpeg_out),
         )
 
+        # Copy the export JPEG into the per-step previews directory. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "export.jpg"
+            await save_step_preview(source_fits, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/export"
+        except Exception:  # noqa: BLE001
+            logger.warning("export_preview_failed")
+
         return StepResult(
             success=True,
             metadata={
@@ -103,6 +124,7 @@ class ExportStep(PipelineStep):
                 "tiff_path": str(tiff_out),
                 "jpeg_path": str(jpeg_out),
                 "thumbnail_path": str(thumb_out),
+                **({"preview_url": preview_url} if preview_url else {}),
             },
             message="Export complete.",
         )
@@ -111,16 +133,56 @@ class ExportStep(PipelineStep):
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 
-def _copy_fits(src: Path, dst: Path) -> None:
-    """Copy a FITS file to the output directory.
+def _copy_fits(src: Path, dst: Path, profile_config: dict[str, Any] | None = None) -> None:
+    """Copy a FITS file to the output directory and stamp provenance.
+
+    Adds HISTORY cards identifying AstroStack as the producer plus a series
+    of COMMENT cards holding a JSON dump of the active profile parameters.
+    Falls back to a plain copy if the FITS update path raises (e.g. astropy
+    missing or header full).
 
     Args:
         src: Source FITS path.
         dst: Destination FITS path.
+        profile_config: Active processing profile (dict).
     """
     import shutil  # noqa: PLC0415
 
     shutil.copy2(str(src), str(dst))
+    try:
+        _stamp_fits_metadata(dst, profile_config)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export_fits_stamp_failed", error=str(exc))
+
+
+def _stamp_fits_metadata(path: Path, profile_config: dict[str, Any] | None) -> None:
+    """Append AstroStack provenance HISTORY/COMMENT cards to a FITS header."""
+    import json  # noqa: PLC0415
+
+    from astropy.io import fits  # noqa: PLC0415
+
+    from app.pipeline.utils.display import (  # noqa: PLC0415
+        ASTROSTACK_BRAND,
+        ASTROSTACK_URL,
+        summarize_profile_config,
+    )
+
+    with fits.open(str(path), mode="update") as hdul:
+        hdr = hdul[0].header
+        hdr["CREATOR"] = ("AstroStack", "Pipeline used to produce this file")
+        hdr.add_history(f"{ASTROSTACK_BRAND} - {ASTROSTACK_URL}")
+        for label, value in summarize_profile_config(profile_config or {}):
+            # FITS card payload limited to ~70 chars; keep it short.
+            hdr.add_history(f"{label}: {value}"[:70])
+        if profile_config:
+            try:
+                payload = json.dumps(profile_config, separators=(",", ":"), default=str)
+            except (TypeError, ValueError):
+                payload = ""
+            # Split JSON across multiple COMMENT cards (max ~70 chars each).
+            for i in range(0, len(payload), 70):
+                hdr.add_comment(f"AS_PROFILE: {payload[i:i + 70]}")
+        hdul.flush()
 
 
 def _export_raster(
@@ -128,11 +190,14 @@ def _export_raster(
     tiff_path: Path,
     jpeg_path: Path,
     thumb_path: Path,
+    profile_config: dict[str, Any] | None = None,
 ) -> None:
     """Convert a FITS image to TIFF, JPEG, and thumbnail.
 
-    Applies auto-stretch to map the 32-bit float FITS data to 8-bit/16-bit
-    display ranges. Uses astropy + Pillow.
+    Uses :func:`app.pipeline.utils.display.load_fits_display_rgb` to apply the
+    same per-channel percentile + asinh midtone stretch as the in-pipeline
+    previews. This guarantees the final ``preview.jpg`` matches the per-step
+    JPEGs the user has been seeing during processing.
 
     Args:
         fits_path: Source FITS file.
@@ -140,48 +205,77 @@ def _export_raster(
         jpeg_path: Output JPEG path (quality 95).
         thumb_path: Output PNG thumbnail (800px wide).
     """
-    import numpy as np  # noqa: PLC0415
-    from astropy.io import fits  # noqa: PLC0415
     from PIL import Image  # noqa: PLC0415
 
-    with fits.open(str(fits_path)) as hdul:
-        data = hdul[0].data
+    from app.pipeline.utils.display import (  # noqa: PLC0415
+        ASTROSTACK_BRAND,
+        ASTROSTACK_URL,
+        apply_hdr_polish,
+        load_fits_display_rgb,
+        render_metadata_badge,
+        summarize_profile_config,
+        to_uint8,
+        to_uint16,
+    )
 
-    if data is None:
-        raise ValueError(f"FITS file {fits_path} has no image data.")
+    arr_norm = load_fits_display_rgb(fits_path)
 
-    # Handle 3-channel (CxHxW) or 2D (HxW) arrays
-    if data.ndim == 3:
-        # Convert (C, H, W) → (H, W, C) for Pillow
-        arr = np.moveaxis(data, 0, -1)
-        if arr.shape[2] == 1:
-            arr = arr[:, :, 0]
-    else:
-        arr = data
+    # Apply a gentle HDR-style polish (midtone S-curve + highlight rolloff +
+    # mild saturation boost) on the deliverable rasters. The pristine FITS
+    # archive copy is left untouched for scientific reuse.
+    arr_polished = apply_hdr_polish(arr_norm)
 
-    # Auto-stretch: clip to 0.01–99.99th percentile
-    lo, hi = np.percentile(arr, (0.01, 99.99))
-    if hi == lo:
-        hi = lo + 1.0
-    arr_norm = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
+    # Build provenance strings shared by TIFF tags + JPEG badge.
+    summary_pairs = summarize_profile_config(profile_config or {})
+    summary_text = "; ".join(f"{k}={v}" for k, v in summary_pairs)
+    tiff_description = f"{ASTROSTACK_BRAND} ({ASTROSTACK_URL}). {summary_text}".strip()
 
-    # 16-bit TIFF
-    arr_16 = (arr_norm * 65535).astype(np.uint16)
-    img_16 = (
-        Image.fromarray(arr_16)
-        if arr_16.ndim == 2
-        else Image.fromarray(arr_16, mode="RGB" if arr_16.shape[2] == 3 else "L")
-    )  # type: ignore[call-overload]
-    img_16.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
+    # 16-bit TIFF — PIL.fromarray does not support uint16 RGB;
+    # use tifffile when available (installed via Cosmic Clarity requirements), else uint8.
+    arr_16 = to_uint16(arr_polished)
+    try:
+        import tifffile as _tifffile  # noqa: PLC0415
+        _photometric = "rgb" if arr_16.ndim == 3 and arr_16.shape[2] == 3 else "minisblack"
+        # TIFF tag 305 = Software, 270 = ImageDescription, 315 = Artist.
+        extratags = [
+            (305, "s", 0, "AstroStack", True),
+            (270, "s", 0, tiff_description, True),
+            (315, "s", 0, ASTROSTACK_URL, True),
+        ]
+        _tifffile.imwrite(
+            str(tiff_path),
+            arr_16,
+            photometric=_photometric,
+            compression="deflate",
+            extratags=extratags,
+        )
+    except ImportError:
+        # Fallback: 8-bit TIFF (PIL uint16 RGB is unsupported)
+        arr_fb = to_uint8(arr_polished)
+        img_fb = (
+            Image.fromarray(arr_fb)
+            if arr_fb.ndim == 2
+            else Image.fromarray(arr_fb, mode="RGB" if arr_fb.shape[2] == 3 else "L")
+        )
+        img_fb.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
 
-    # JPEG (8-bit)
-    arr_8 = (arr_norm * 255).astype(np.uint8)
-    img_8 = Image.fromarray(arr_8)
-    if img_8.mode == "I;16":
-        img_8 = img_8.convert("L")
-    img_8.save(str(jpeg_path), format="JPEG", quality=95)
+    # JPEG (8-bit) — also from the polished rendition for consistency, with a
+    # composited provenance badge along the bottom edge.
+    arr_8 = to_uint8(arr_polished)
+    img_8 = (
+        Image.fromarray(arr_8, mode="L").convert("RGB")
+        if arr_8.ndim == 2
+        else Image.fromarray(arr_8, mode="RGB")
+    )
+    try:
+        img_branded = render_metadata_badge(img_8, summary_pairs)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("export_jpeg_badge_failed", error=str(exc))
+        img_branded = img_8
+    img_branded.save(str(jpeg_path), format="JPEG", quality=95)
 
-    # Thumbnail (800px wide)
+    # Thumbnail (800px wide) — built from the un-branded 8-bit array so the
+    # badge is not duplicated on the small preview.
     thumb = img_8.copy()
     w, h = thumb.size
     if w > 800:

@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, Text, func
+from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlmodel import Column, Field, SQLModel
 
@@ -106,13 +106,19 @@ class PipelineJob(SQLModel, table=True):
     session_id: uuid.UUID = Field(
         sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True)
     )
-    profile_preset: ProfilePreset = Field(default=ProfilePreset.STANDARD)
+    profile_preset: str = Field(
+        default=ProfilePreset.STANDARD,
+        sa_column=Column(String(50), nullable=False),
+    )
     profile_id: Optional[uuid.UUID] = Field(
         default=None,
         sa_column=Column(PG_UUID(as_uuid=True), nullable=True),
     )
 
-    status: JobStatus = Field(default=JobStatus.PENDING, index=True)
+    status: str = Field(
+        default=JobStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
     current_step: Optional[str] = Field(default=None, max_length=100)
     arq_job_id: Optional[str] = Field(default=None, max_length=255)
 
@@ -131,6 +137,15 @@ class PipelineJob(SQLModel, table=True):
     output_fits_path: Optional[str] = Field(default=None, max_length=1024)
     output_tiff_path: Optional[str] = Field(default=None, max_length=1024)
     output_preview_path: Optional[str] = Field(default=None, max_length=1024)
+
+    # Snapshot of the resolved processing profile used at job creation.
+    # Stored as JSONB so the UI can render the full parameter set even if
+    # the source preset / saved profile is later edited.  ``None`` for
+    # legacy jobs created before this column existed.
+    profile_snapshot: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -173,7 +188,10 @@ class JobStep(SQLModel, table=True):
     job_id: uuid.UUID = Field(sa_column=Column(PG_UUID(as_uuid=True), nullable=False, index=True))
     step_name: str = Field(max_length=100, index=True)
     step_index: int = Field(ge=0)
-    status: StepStatus = Field(default=StepStatus.PENDING, index=True)
+    status: str = Field(
+        default=StepStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
     attempt_count: int = Field(default=0, ge=0)
 
     started_at: Optional[datetime] = Field(
@@ -200,8 +218,9 @@ class JobStepRead(SQLModel):
     """Read schema for a single pipeline step result.
 
     Attributes:
-        id: Step record UUID.
+        id: Step record UUID (None for steps not yet started).
         step_name: Step identifier.
+        display_name: Human-readable step label.
         step_index: Ordinal position.
         status: Execution status.
         attempt_count: Number of attempts made.
@@ -211,8 +230,9 @@ class JobStepRead(SQLModel):
         output_metadata: Step-specific result data.
     """
 
-    id: uuid.UUID
+    id: Optional[uuid.UUID] = None
     step_name: str
+    display_name: str = ""
     step_index: int
     status: StepStatus
     attempt_count: int
@@ -252,5 +272,6 @@ class JobRead(SQLModel):
     output_fits_path: Optional[str]
     output_tiff_path: Optional[str]
     output_preview_path: Optional[str]
+    profile_snapshot: Optional[dict[str, Any]] = None
     created_at: datetime
     steps: list[JobStepRead] = Field(default_factory=list)

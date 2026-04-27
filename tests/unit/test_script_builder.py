@@ -10,7 +10,7 @@ from app.domain.profile import ProcessingProfileConfig
 from app.pipeline.adapters.siril_script_builder import (
     SirilScriptBuilder,
     _normalization_flag,
-    _rejection_algo_flag,
+    _rejection_type,
 )
 
 
@@ -109,18 +109,17 @@ class TestSirilScriptBuilder:
         assert len(stack_cmds) == 1
         assert "rej" in stack_cmds[0]
 
-    def test_drizzle_flag_added_when_enabled(
+    def test_drizzle_flag_not_added_even_when_enabled(
         self,
         drizzle_config: ProcessingProfileConfig,
         minimal_frames: dict,
     ) -> None:
-        """Stack command must include -drizzle flag when drizzle is enabled."""
+        """Drizzle is incompatible with -cfa -debayer and must never appear in the stack command."""
         builder = SirilScriptBuilder(drizzle_config, minimal_frames, Path("/work"))
         commands = builder.build_preprocessing_commands()
         stack_cmds = [c for c in commands if "stack" in c and "r_pp_light" in c]
         assert len(stack_cmds) == 1
-        assert "-drizzle" in stack_cmds[0]
-        assert "-scale=2" in stack_cmds[0]
+        assert "-drizzle" not in stack_cmds[0]
 
     def test_no_drizzle_flag_when_disabled(
         self,
@@ -133,21 +132,47 @@ class TestSirilScriptBuilder:
         stack_cmds = [c for c in commands if "r_pp_light" in c]
         assert all("-drizzle" not in c for c in stack_cmds)
 
+    def test_seqapplyreg_follows_register(
+        self,
+        standard_config: ProcessingProfileConfig,
+        minimal_frames: dict,
+    ) -> None:
+        """seqapplyreg must appear immediately after register -2pass."""
+        builder = SirilScriptBuilder(standard_config, minimal_frames, Path("/work"))
+        commands = builder.build_preprocessing_commands()
+        reg_idx = next(i for i, c in enumerate(commands) if c.startswith("register"))
+        assert commands[reg_idx + 1].startswith("seqapplyreg")
 
-class TestRejectionAlgoFlag:
-    """Tests for _rejection_algo_flag() helper."""
+    def test_stack_uses_correct_siril_14_rejection_syntax(
+        self,
+        standard_config: ProcessingProfileConfig,
+        minimal_frames: dict,
+    ) -> None:
+        """Stack command must use 'rej <type> <low> <high>' Siril 1.4 syntax."""
+        builder = SirilScriptBuilder(standard_config, minimal_frames, Path("/work"))
+        commands = builder.build_preprocessing_commands()
+        stack_cmd = next(c for c in commands if c.startswith("stack r_pp_light"))
+        # Must NOT use old pre-1.4 tokens wrej/lrej
+        assert "wrej" not in stack_cmd
+        assert "lrej" not in stack_cmd
+        # Must follow 'rej <type> <low> <high>' pattern
+        assert "rej winsorized" in stack_cmd
 
-    def test_sigma_maps_to_rej(self) -> None:
-        assert _rejection_algo_flag("sigma") == "rej"
 
-    def test_winsorized_maps_to_wrej(self) -> None:
-        assert _rejection_algo_flag("winsorized") == "wrej"
+class TestRejectionType:
+    """Tests for _rejection_type() helper."""
 
-    def test_linear_maps_to_lrej(self) -> None:
-        assert _rejection_algo_flag("linear") == "lrej"
+    def test_sigma_maps_to_sigma(self) -> None:
+        assert _rejection_type("sigma") == "sigma"
 
-    def test_unknown_defaults_to_rej(self) -> None:
-        assert _rejection_algo_flag("unknown") == "rej"
+    def test_winsorized_maps_to_winsorized(self) -> None:
+        assert _rejection_type("winsorized") == "winsorized"
+
+    def test_linear_maps_to_linear(self) -> None:
+        assert _rejection_type("linear") == "linear"
+
+    def test_unknown_defaults_to_winsorized(self) -> None:
+        assert _rejection_type("unknown") == "winsorized"
 
 
 class TestNormalizationFlag:

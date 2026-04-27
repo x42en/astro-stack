@@ -66,6 +66,7 @@ class EventType(str, Enum):
     CANCELLED = "cancelled"
     SESSION_DETECTED = "session_detected"
     SESSION_READY = "session_ready"
+    SESSION_STATUS = "session_status"
 
 
 class LogLevel(str, Enum):
@@ -278,6 +279,26 @@ class SessionReadyEvent(BaseEvent):
     input_format: str
 
 
+class SessionStatusEvent(BaseEvent):
+    """Session-level status change, broadcast to all connected clients.
+
+    Emitted by the pipeline orchestrator when a job changes the session
+    status (processing started, completed, failed). Clients use this to
+    update the session list without polling.
+
+    Attributes:
+        type: Always ``EventType.SESSION_STATUS``.
+        new_status: New session status string (e.g. ``"processing"``,
+            ``"completed"``, ``"failed"``).
+        job_status: Current job status string (e.g. ``"running"``,
+            ``"completed"``, ``"failed"``).
+    """
+
+    type: Literal[EventType.SESSION_STATUS] = EventType.SESSION_STATUS
+    new_status: str
+    job_status: Optional[str] = None
+
+
 # ── Union type for client-side deserialisation ────────────────────────────────
 
 AnyEvent = Union[
@@ -289,4 +310,5 @@ AnyEvent = Union[
     CancelledEvent,
     SessionDetectedEvent,
     SessionReadyEvent,
+    SessionStatusEvent,
 ]

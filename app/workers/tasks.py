@@ -23,8 +23,12 @@ from app.core.errors import AstroStackException
 from app.core.logging import get_logger
 from app.domain.job import JobStatus
 from app.domain.profile import ProcessingProfileConfig
+from app.domain.session import SessionStatus
+from app.domain.ws_event import SessionStatusEvent
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.repositories.job_repo import JobRepository
+from app.infrastructure.repositories.session_repo import SessionRepository
+from app.infrastructure.storage.file_store import FileStore
 
 logger = get_logger(__name__)
 
@@ -70,6 +74,7 @@ async def run_pipeline(
     )
 
     event_bus: EventBus = ctx["event_bus"]
+    file_store = FileStore()
 
     async for db_session in get_async_session():
         try:
@@ -85,6 +90,7 @@ async def run_pipeline(
             )
             outputs = await orchestrator.run()
             logger.info("pipeline_task_completed", job_id=job_id_str, outputs=list(outputs.keys()))
+            await file_store.cleanup_work_dir(session_id)
             return outputs
 
         except AstroStackException as exc:
@@ -94,12 +100,41 @@ async def run_pipeline(
                 error_code=exc.error_code.value,
                 message=exc.message,
             )
-            if exc.retryable:
+            # Cap ARQ-level retries so the session is eventually marked FAILED
+            # rather than staying in Processing indefinitely. job_try is 1-based.
+            _MAX_ARQ_TRIES = 3
+            if exc.retryable and ctx.get("job_try", 1) < _MAX_ARQ_TRIES:
+                # Do NOT clean up: the orchestrator resumes from already-succeeded
+                # steps (e.g. raw_conversion), so converted FITS in work_dir must
+                # be preserved across the ARQ-level retry.
                 raise Retry(defer=30) from exc
+            # Retries exhausted or non-retryable: persist FAILED, notify, clean up
+            await SessionRepository(db_session).update(
+                session_id, {"status": SessionStatus.FAILED.value}
+            )
+            failed_event = SessionStatusEvent(
+                session_id=session_id,
+                new_status="failed",
+                job_status="failed",
+            )
+            await event_bus.publish_session_event(session_id, failed_event)
+            await event_bus.publish_broadcast(failed_event)
+            await file_store.cleanup_work_dir(session_id)
             return {"error": exc.message, "error_code": exc.error_code.value}
 
         except Exception as exc:  # noqa: BLE001
             logger.exception("pipeline_task_unexpected_error", job_id=job_id_str)
+            await SessionRepository(db_session).update(
+                session_id, {"status": SessionStatus.FAILED.value}
+            )
+            failed_event = SessionStatusEvent(
+                session_id=session_id,
+                new_status="failed",
+                job_status="failed",
+            )
+            await event_bus.publish_session_event(session_id, failed_event)
+            await event_bus.publish_broadcast(failed_event)
+            await file_store.cleanup_work_dir(session_id)
             return {"error": str(exc), "error_code": "SYS_INTERNAL_ERROR"}
 
 

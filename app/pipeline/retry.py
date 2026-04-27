@@ -29,7 +29,6 @@ _DEFAULT_RETRYABLE: frozenset[ErrorCode] = frozenset(
         ErrorCode.PIPE_COSMIC_DENOISE_FAILED,
         ErrorCode.PIPE_COSMIC_SHARPEN_FAILED,
         ErrorCode.PIPE_COSMIC_SUPERRES_FAILED,
-        ErrorCode.PIPE_PLATE_SOLVE_FAILED,
         ErrorCode.SYS_REDIS_UNAVAILABLE,
     }
 )

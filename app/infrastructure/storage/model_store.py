@@ -85,10 +85,32 @@ COSMIC_CLARITY_MODELS: list[ModelDescriptor] = [
 ]
 
 GRAXPERT_MODELS: list[ModelDescriptor] = [
+    # GraXpert 3.x stores ONNX weights under
+    # ``GraXpert/<task>-ai-models/<version>/model.onnx``. The directory layout
+    # is selected via the ``GRAXPERT_AI_MODELS_DIR`` environment variable
+    # (or the ``-ai_models_dir`` CLI flag) which must point to the
+    # ``GraXpert`` parent folder inside the models volume.
     ModelDescriptor(
-        name="GraXpert AI gradient model",
-        filename="graxpert/GraXpert-AI-1.0.0.pth",
+        name="GraXpert BGE 1.0.1 (background extraction)",
+        filename="GraXpert/bge-ai-models/1.0.1/model.onnx",
         required=True,
+    ),
+    # Optional models reserved for future advanced profiles
+    # (denoising / object deconvolution / star deconvolution).
+    ModelDescriptor(
+        name="GraXpert Denoise 3.0.2",
+        filename="GraXpert/denoise-ai-models/3.0.2/model.onnx",
+        required=False,
+    ),
+    ModelDescriptor(
+        name="GraXpert Deconv (object) 1.0.1",
+        filename="GraXpert/deconvolution-object-ai-models/1.0.1/model.onnx",
+        required=False,
+    ),
+    ModelDescriptor(
+        name="GraXpert Deconv (stars) 1.0.0",
+        filename="GraXpert/deconvolution-stars-ai-models/1.0.0/model.onnx",
+        required=False,
     ),
 ]
 

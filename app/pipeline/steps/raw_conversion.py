@@ -23,6 +23,7 @@ from app.core.errors import ErrorCode, PipelineStepException
 from app.core.logging import get_logger
 from app.infrastructure.storage.file_store import FITS_EXTENSIONS, RAW_DSLR_EXTENSIONS
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -103,13 +104,35 @@ class RawConversionStep(PipelineStep):
                     details={"file": str(raw_path)},
                 ) from exc
 
+        # Capture first raw light path before remapping (remap overwrites frames in-place).
+        raw_light_files = [
+            f for f in frames.get("lights", []) if f.suffix.lower() in RAW_DSLR_EXTENSIONS
+        ]
+        first_raw_light = raw_light_files[0] if raw_light_files else None
+
         # Update frame paths in context to point to converted FITS files
         _remap_frames_to_fits(frames, context.work_dir)
+
+        # Generate a JPEG preview from the first converted light frame.
+        # Non-critical: a failure here must not abort the pipeline.
+        preview_url: str | None = None
+        if first_raw_light is not None:
+            first_fits = _target_fits_path(first_raw_light, context.work_dir)
+            if first_fits.exists():
+                try:
+                    preview_path = context.output_dir / "previews" / "raw_conversion.jpg"
+                    await save_step_preview(first_fits, preview_path)
+                    preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/raw_conversion"
+                except Exception:  # noqa: BLE001
+                    logger.warning("raw_conversion_preview_failed")
 
         logger.info("raw_conversion_done", converted=converted)
         return StepResult(
             success=True,
-            metadata={"converted_count": converted},
+            metadata={
+                "converted_count": converted,
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message=f"Converted {converted} RAW files to FITS.",
         )
 
@@ -154,17 +177,42 @@ def _convert_raw_to_fits(raw_path: Path, fits_path: Path) -> None:
     from astropy.io import fits  # noqa: PLC0415
 
     with rawpy.imread(str(raw_path)) as raw:
-        rgb = raw.postprocess(
-            output_bps=16,
-            no_auto_bright=True,
-            use_camera_wb=True,
+        # Read raw Bayer CFA data directly — do NOT debayer.
+        # Siril will calibrate (dark/flat) at the CFA level, then debayer,
+        # which is the correct astrophotography workflow.
+        bayer = raw.raw_image_visible.copy()          # uint16, shape (H, W)
+
+        # Build the actual 2×2 Bayer pattern from the sensor's top-left pixels.
+        # raw.color_desc gives the *unique* color names (e.g. b"RGBG") in
+        # index order, NOT the 2×2 mosaic string that BAYERPAT requires.
+        # raw.raw_colors_visible[row, col] gives the colour index for each
+        # pixel; combining the two gives the canonical pattern ("RGGB",
+        # "GBRG", "BGGR", or "GRBG") that Siril reads from the header.
+        top2x2 = raw.raw_colors_visible[0:2, 0:2]
+        bayer_pattern = "".join(
+            chr(raw.color_desc[top2x2[r, c]]) for r in range(2) for c in range(2)
         )
-    # Convert HxWx3 → 3xHxW for FITS axis order
-    data = rgb.transpose(2, 0, 1).astype(np.float32)
+        logger.info(
+            "raw_conversion_bayer_pattern",
+            file=str(raw_path.name),
+            bayer_pattern=bayer_pattern,
+            color_desc=raw.color_desc.decode("ascii", errors="replace"),
+            top2x2=top2x2.tolist(),
+        )
+
+    # Normalise to [0.0, 1.0].  Siril's float32 FITS convention uses a
+    # [0, 1] scale: values > 1.0 are clipped to 1.0 (saturated), so writing
+    # raw ADU counts (0–65535) would make every pixel clip to 1.0 → after
+    # addscale stack normalisation the background gets subtracted → all-black
+    # stack.  Dividing by 65535 maps the full 16-bit range to [0, 1].
+    data = bayer.astype(np.float32) / 65535.0
 
     hdu = fits.PrimaryHDU(data=data)
     hdu.header["ORIGINAL"] = str(raw_path.name)
-    hdu.header["BAYERPAT"] = "RGB"
+    # Standard Bayer headers that Siril reads to auto-detect the CFA pattern.
+    hdu.header["BAYERPAT"] = bayer_pattern
+    hdu.header["XBAYROFF"] = 0
+    hdu.header["YBAYROFF"] = 0
     hdu.writeto(str(fits_path), overwrite=True)
 
 

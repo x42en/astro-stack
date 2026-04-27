@@ -127,6 +127,35 @@ class FileStore:
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
+    def step_preview_path(self, session_id: uuid.UUID, step_name: str) -> Path:
+        """Return the path where a per-step JPEG preview is stored.
+
+        Previews survive the work-directory cleanup because they live under
+        the ``/output/`` tree, not under ``/sessions/``.
+
+        Args:
+            session_id: Session UUID.
+            step_name: Machine-readable step identifier (e.g. ``"preprocessing"``).
+
+        Returns:
+            Path under ``/output/{session_id}/previews/{step_name}.jpg``.
+        """
+        return self.output_root / str(session_id) / "previews" / f"{step_name}.jpg"
+
+    def light_preview_path(self, session_id: uuid.UUID) -> Path:
+        """Return the path where the cached light-frame preview JPEG is stored.
+
+        This preview is generated on-demand from the first discovered light
+        frame and cached permanently alongside the per-step previews.
+
+        Args:
+            session_id: Session UUID.
+
+        Returns:
+            Path under ``/output/{session_id}/previews/light_preview.jpg``.
+        """
+        return self.output_root / str(session_id) / "previews" / "light_preview.jpg"
+
     # ── Frame discovery ───────────────────────────────────────────────────────
 
     def discover_frames(
@@ -225,6 +254,34 @@ class FileStore:
         if work_dir.exists():
             await aiofiles.os.wrap(shutil.rmtree)(work_dir)
             logger.info("work_dir_cleaned", session_id=str(session_id))
+
+    async def delete_session_files(self, session_id: uuid.UUID) -> None:
+        """Remove all files associated with a session across all storage roots.
+
+        Deletes the following directories if they exist:
+        - ``/inbox/{session_id}/`` — original uploaded frames
+        - ``/sessions/{session_id}/`` — intermediate working files
+        - ``/output/{session_id}/`` — final outputs and previews
+
+        All deletions use ``ignore_errors=True`` so the operation is idempotent
+        and safe even when some directories were already cleaned up.
+
+        Args:
+            session_id: UUID of the session to delete.
+        """
+        rmtree = aiofiles.os.wrap(shutil.rmtree)
+        sid = str(session_id)
+
+        inbox_dir = self.inbox_root / sid
+        work_dir = self.sessions_root / sid
+        out_dir = self.output_root / sid
+
+        for path in (inbox_dir, work_dir, out_dir):
+            if path.exists():
+                await rmtree(path, ignore_errors=True)
+                logger.info("session_dir_deleted", path=str(path), session_id=sid)
+            else:
+                logger.debug("session_dir_not_found_skip", path=str(path), session_id=sid)
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────

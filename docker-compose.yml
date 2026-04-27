@@ -9,7 +9,6 @@ x-astro-common: &astro-common
   build:
     context: .
     dockerfile: Dockerfile
-  runtime: nvidia
   environment:
     # Application
     - APP_NAME=Astro-Stack
@@ -34,7 +33,7 @@ x-astro-common: &astro-common
     - MODELS_PATH=/models
     # External tools
     - SIRIL_BINARY=siril-cli
-    - ASTAP_BINARY=astap
+    - ASTAP_BINARY=astap_cli
     - ASTAP_STAR_DB_PATH=/opt/astap/stars
     # Pipeline
     - PIPELINE_MAX_RETRIES=3
@@ -135,7 +134,7 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
@@ -163,6 +162,7 @@ services:
   # ── Worker — GPU 0 ───────────────────────────────────────────────────────────
   astro-worker-gpu0:
     <<: *astro-common
+    runtime: nvidia
     container_name: astro-worker-gpu0
     command:
       - python
@@ -182,13 +182,13 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
       # GPU assignment — this worker uses GPU 0
       - NVIDIA_VISIBLE_DEVICES=0
-      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - WORKER_GPU_DEVICE=0
     healthcheck:
       test: ["CMD", "python", "-c", "import redis, os; r = redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); r.ping()"]
@@ -207,6 +207,7 @@ services:
   # ── Worker — GPU 1 ───────────────────────────────────────────────────────────
   astro-worker-gpu1:
     <<: *astro-common
+    runtime: nvidia
     container_name: astro-worker-gpu1
     command:
       - python
@@ -226,14 +227,18 @@ services:
       - OUTPUT_PATH=/output
       - MODELS_PATH=/models
       - SIRIL_BINARY=siril-cli
-      - ASTAP_BINARY=astap
+      - ASTAP_BINARY=astap_cli
       - ASTAP_STAR_DB_PATH=/opt/astap/stars
       - PIPELINE_MAX_RETRIES=3
       - SESSION_STABILITY_DELAY=30.0
       # GPU assignment — this worker uses GPU 1
+      # NVIDIA_VISIBLE_DEVICES=1 makes physical GPU 1 the sole visible device;
+      # inside the container CUDA always enumerates it as cuda:0.
+      # Do NOT set CUDA_VISIBLE_DEVICES here — it would apply to the already-
+      # filtered set and make no CUDA device visible.
       - NVIDIA_VISIBLE_DEVICES=1
-      - CUDA_VISIBLE_DEVICES=1
-      - WORKER_GPU_DEVICE=1
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - WORKER_GPU_DEVICE=0
     healthcheck:
       test: ["CMD", "python", "-c", "import redis, os; r = redis.from_url(os.environ.get('REDIS_URL', 'redis://redis:6379/0')); r.ping()"]
       interval: 30s
@@ -315,6 +320,7 @@ volumes:
 networks:
   astro-net:
     driver: bridge
+    name: astro-net  # Pin the name to avoid Docker Compose project-prefix (astro-stack_astro-net)
 
 # Enable NVIDIA GPU support for all services
 x-gpu-common: &gpu-common

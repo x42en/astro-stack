@@ -13,9 +13,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from typing import Any
+
 from sqlmodel import Column, Field, SQLModel
-from sqlalchemy import DateTime, func
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import DateTime, String, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 
 
 class SessionStatus(str, Enum):
@@ -82,8 +84,14 @@ class AstroSession(SQLModel, table=True):
     )
     name: str = Field(max_length=255, index=True)
     inbox_path: str = Field(max_length=1024)
-    status: SessionStatus = Field(default=SessionStatus.PENDING, index=True)
-    input_format: Optional[InputFormat] = Field(default=None)
+    status: str = Field(
+        default=SessionStatus.PENDING,
+        sa_column=Column(String(50), nullable=False, index=True),
+    )
+    input_format: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(20), nullable=True),
+    )
 
     frame_count_lights: int = Field(default=0, ge=0)
     frame_count_darks: int = Field(default=0, ge=0)
@@ -93,6 +101,41 @@ class AstroSession(SQLModel, table=True):
     object_name: Optional[str] = Field(default=None, max_length=255)
     ra: Optional[float] = Field(default=None)
     dec: Optional[float] = Field(default=None)
+
+    # Capture timestamp of the earliest light frame (extracted from EXIF
+    # DateTimeOriginal for RAW files, or DATE-OBS / DATE for FITS).  Falls
+    # back to ``None`` when no exploitable header is found.
+    acquired_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+    # Aggregated EXIF / FITS-header capture parameters across the light
+    # frames (ISO, exposure_seconds, f_number, focal_length_mm, camera_make,
+    # camera_model, lens_model, telescope, filter, temperature_c, plus a
+    # frame_count and total_integration_seconds).  See
+    # :func:`app.pipeline.utils.exif.extract_capture_metadata` for the full
+    # schema.  Stored as JSONB so the UI can render any subset.
+    capture_metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
+
+    # User-supplied target coordinates (J2000, decimal degrees).
+    # When set, ASTAP plate-solve uses them as the search centre with a small
+    # radius, dramatically improving solve speed and reliability.  These are
+    # NOT overwritten by the plate-solve result (which populates ra/dec).
+    target_ra: Optional[float] = Field(default=None)
+    target_dec: Optional[float] = Field(default=None)
+
+    # ── Public gallery ──────────────────────────────────────────────────
+    is_in_gallery: bool = Field(default=False, index=True)
+    gallery_published_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    gallery_author_name: Optional[str] = Field(default=None, max_length=120)
+    gallery_download_count: int = Field(default=0, ge=0)
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
@@ -157,8 +200,17 @@ class SessionRead(SQLModel):
     object_name: Optional[str]
     ra: Optional[float]
     dec: Optional[float]
+    target_ra: Optional[float]
+    target_dec: Optional[float]
+    acquired_at: Optional[datetime]
+    capture_metadata: Optional[dict[str, Any]] = None
+    is_in_gallery: bool = False
+    gallery_published_at: Optional[datetime] = None
+    gallery_author_name: Optional[str] = None
+    gallery_download_count: int = 0
     created_at: datetime
     updated_at: datetime
+
 
 
 class SessionUpdate(SQLModel):
@@ -168,8 +220,12 @@ class SessionUpdate(SQLModel):
         name: New human-readable name.
         status: Target status (restricted transitions enforced by the service).
         object_name: Override resolved object name.
+        target_ra: User-supplied target right ascension (J2000, degrees).
+        target_dec: User-supplied target declination (J2000, degrees).
     """
 
     name: Optional[str] = Field(default=None, max_length=255)
     status: Optional[SessionStatus] = None
     object_name: Optional[str] = Field(default=None, max_length=255)
+    target_ra: Optional[float] = Field(default=None)
+    target_dec: Optional[float] = Field(default=None)

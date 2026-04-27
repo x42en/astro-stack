@@ -47,7 +47,7 @@ class JobRepository(BaseRepository[PipelineJob]):
             .limit(limit)
         )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_active_job_for_session(
         self,
@@ -63,10 +63,10 @@ class JobRepository(BaseRepository[PipelineJob]):
         """
         stmt = select(PipelineJob).where(
             PipelineJob.session_id == session_id,
-            PipelineJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),  # type: ignore[attr-defined]
+            PipelineJob.status.in_([JobStatus.PENDING.value, JobStatus.RUNNING.value]),  # type: ignore[attr-defined]
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def update_status(
         self,
@@ -112,7 +112,7 @@ class JobStepRepository(BaseRepository[JobStep]):
             select(JobStep).where(JobStep.job_id == job_id).order_by(JobStep.step_index)  # type: ignore[attr-defined]
         )
         result = await self.session.execute(stmt)
-        return list(result.all())
+        return list(result.scalars().all())
 
     async def get_by_job_and_name(
         self,
@@ -133,7 +133,7 @@ class JobStepRepository(BaseRepository[JobStep]):
             JobStep.step_name == step_name,
         )
         result = await self.session.execute(stmt)
-        return result.first()
+        return result.scalars().first()
 
     async def upsert_step(self, step: JobStep) -> JobStep:
         """Insert or update a step record.
@@ -150,8 +150,14 @@ class JobStepRepository(BaseRepository[JobStep]):
         existing = await self.get_by_job_and_name(step.job_id, step.step_name)
         if existing is not None:
             for field in step.model_fields:
-                if field not in ("id",):
-                    setattr(existing, field, getattr(step, field))
+                if field in ("id",):
+                    continue
+                new_val = getattr(step, field)
+                # Preserve started_at once set — never overwrite with None so
+                # per-step elapsed-time display in the frontend keeps working.
+                if field == "started_at" and new_val is None:
+                    continue
+                setattr(existing, field, new_val)
             self.session.add(existing)
             await self.session.commit()
             await self.session.refresh(existing)

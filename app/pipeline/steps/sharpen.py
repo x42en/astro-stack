@@ -7,6 +7,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.adapters.cosmic_adapter import CosmicClarityAdapter
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -40,13 +41,20 @@ class SharpenStep(PipelineStep):
             StepResult with ``sharpened_path`` in metadata.
         """
         if not config.get("sharpen_enabled", True):
-            input_path = context.denoised_path or context.background_removed_path
+            input_path = (
+                context.denoised_path
+                or context.stretched_fits_path
+                or context.background_removed_path
+            )
             if input_path:
                 context.sharpened_path = input_path
             return StepResult(success=True, skipped=True, message="Sharpening disabled in profile.")
 
         input_path = (
-            context.denoised_path or context.background_removed_path or context.stacked_fits_path
+            context.denoised_path
+            or context.stretched_fits_path
+            or context.background_removed_path
+            or context.stacked_fits_path
         )
         if input_path is None:
             return StepResult(success=True, skipped=True, message="No input FITS for sharpening.")
@@ -61,14 +69,26 @@ class SharpenStep(PipelineStep):
             output_path=output_path,
             stellar_amount=float(config.get("sharpen_stellar_amount", 0.5)),
             nonstellar_amount=float(config.get("sharpen_nonstellar_amount", 0.7)),
-            radius=int(config.get("sharpen_radius", 2)),
+            nonstellar_strength=float(config.get("sharpen_radius", 3.0)),
         )
 
         context.sharpened_path = output_path
         logger.info("sharpen_done", output=str(output_path))
 
+        # Generate a JPEG preview from the sharpened image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "sharpen.jpg"
+            await save_step_preview(output_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/sharpen"
+        except Exception:  # noqa: BLE001
+            logger.warning("sharpen_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"sharpened_path": str(output_path)},
+            metadata={
+                "sharpened_path": str(output_path),
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message="AI sharpening complete.",
         )

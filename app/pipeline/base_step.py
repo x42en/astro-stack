@@ -52,6 +52,7 @@ class PipelineContext:
     # Paths set by individual steps and consumed by later steps
     stacked_fits_path: Optional[Path] = None
     background_removed_path: Optional[Path] = None
+    stretched_fits_path: Optional[Path] = None
     denoised_path: Optional[Path] = None
     sharpened_path: Optional[Path] = None
     superres_path: Optional[Path] = None

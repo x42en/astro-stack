@@ -8,6 +8,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.pipeline.adapters.graxpert_adapter import GraXpertAdapter
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
 
@@ -30,25 +31,21 @@ class GradientRemovalStep(PipelineStep):
         """Check if the GraXpert AI model is available.
 
         Args:
-            ai_model: Name of the AI model (e.g., "GraXpert-AI-1.0.0").
+            ai_model: Name of the AI model (e.g., "1.0.1").
 
         Returns:
             True if model files exist, False otherwise.
         """
-        # GraXpert stores models in user's data dir or models_path/graxpert
-        # Check both locations for the ONNX model
+        # GraXpert 3.x stores models under XDG_DATA_HOME/GraXpert/ with
+        # subdirectories per command type:
+        #   bge-ai-models/, denoise-ai-models/,
+        #   deconvolution-object-ai-models/, deconvolution-stars-ai-models/
+        # Each subdir contains .onnx model files.
         models_dir = self._adapter.models_path
         if not models_dir.exists():
             return False
 
-        # GraXpert 3.x uses versioned directories with model.onnx
-        for version_dir in models_dir.iterdir():
-            if version_dir.is_dir():
-                onnx_model = version_dir / "model.onnx"
-                if onnx_model.exists():
-                    return True
-
-        return False
+        return any(models_dir.rglob("*.onnx"))
 
     async def execute(
         self,
@@ -80,7 +77,7 @@ class GradientRemovalStep(PipelineStep):
 
         # Determine method: use AI if model is available, else fallback to polynomial
         requested_method = config.get("gradient_removal_method", "ai")
-        ai_model = config.get("gradient_removal_ai_model", "GraXpert-AI-1.0.0")
+        ai_model = config.get("gradient_removal_ai_model", "1.0.1")
 
         method = requested_method
         if requested_method == "ai" and not self._is_ai_model_available(ai_model):
@@ -102,8 +99,21 @@ class GradientRemovalStep(PipelineStep):
         context.background_removed_path = output_path
         logger.info("gradient_removal_done", output=str(output_path), method=method)
 
+        # Generate a JPEG preview from the background-removed image. Non-critical.
+        preview_url: str | None = None
+        try:
+            preview_path = context.output_dir / "previews" / "gradient_removal.jpg"
+            await save_step_preview(output_path, preview_path)
+            preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/gradient_removal"
+        except Exception:  # noqa: BLE001
+            logger.warning("gradient_removal_preview_failed")
+
         return StepResult(
             success=True,
-            metadata={"background_removed_path": str(output_path), "method": method},
+            metadata={
+                "background_removed_path": str(output_path),
+                "method": method,
+                **({"preview_url": preview_url} if preview_url else {}),
+            },
             message=f"Background gradient removed using {method} method.",
         )

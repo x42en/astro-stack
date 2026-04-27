@@ -93,3 +93,35 @@ async def websocket_session_events(
     finally:
         await manager.disconnect_session(websocket, session_id)
         logger.info("ws_session_disconnected", session_id=str(session_id))
+
+
+@router.websocket("/broadcast")
+async def websocket_broadcast(
+    websocket: WebSocket,
+    token: str | None = Query(default=None, description="Optional JWT bearer token"),
+) -> None:
+    """Stream session-level status events to all connected clients.
+
+    Emits :class:`~app.domain.ws_event.SessionStatusEvent` payloads so the
+    dashboard can update session badges and invalidate caches without polling.
+
+    Args:
+        websocket: The incoming WebSocket connection.
+        token: Optional JWT bearer token for authentication.
+    """
+    await validate_optional_token(token)
+
+    manager = websocket.app.state.ws_manager
+    await manager.connect_broadcast(websocket)
+    logger.info("ws_broadcast_connected")
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect_broadcast(websocket)
+        logger.info("ws_broadcast_disconnected")
