@@ -156,6 +156,7 @@ def _export_raster(
     from PIL import Image  # noqa: PLC0415
 
     from app.pipeline.utils.display import (  # noqa: PLC0415
+        apply_hdr_polish,
         load_fits_display_rgb,
         to_uint8,
         to_uint16,
@@ -163,16 +164,21 @@ def _export_raster(
 
     arr_norm = load_fits_display_rgb(fits_path)
 
+    # Apply a gentle HDR-style polish (midtone S-curve + highlight rolloff +
+    # mild saturation boost) on the deliverable rasters. The pristine FITS
+    # archive copy is left untouched for scientific reuse.
+    arr_polished = apply_hdr_polish(arr_norm)
+
     # 16-bit TIFF — PIL.fromarray does not support uint16 RGB;
     # use tifffile when available (installed via Cosmic Clarity requirements), else uint8.
-    arr_16 = to_uint16(arr_norm)
+    arr_16 = to_uint16(arr_polished)
     try:
         import tifffile as _tifffile  # noqa: PLC0415
         _photometric = "rgb" if arr_16.ndim == 3 and arr_16.shape[2] == 3 else "minisblack"
         _tifffile.imwrite(str(tiff_path), arr_16, photometric=_photometric, compression="deflate")
     except ImportError:
         # Fallback: 8-bit TIFF (PIL uint16 RGB is unsupported)
-        arr_fb = to_uint8(arr_norm)
+        arr_fb = to_uint8(arr_polished)
         img_fb = (
             Image.fromarray(arr_fb)
             if arr_fb.ndim == 2
@@ -180,8 +186,8 @@ def _export_raster(
         )
         img_fb.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
 
-    # JPEG (8-bit)
-    arr_8 = to_uint8(arr_norm)
+    # JPEG (8-bit) — also from the polished rendition for consistency
+    arr_8 = to_uint8(arr_polished)
     img_8 = (
         Image.fromarray(arr_8, mode="L").convert("RGB")
         if arr_8.ndim == 2

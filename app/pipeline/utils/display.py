@@ -186,3 +186,92 @@ def to_uint8(arr: np.ndarray) -> np.ndarray:
 def to_uint16(arr: np.ndarray) -> np.ndarray:
     """Convert a ``[0, 1]`` float array to uint16 ``[0, 65535]``."""
     return np.clip(arr * 65535.0, 0.0, 65535.0).astype(np.uint16)
+
+
+def apply_hdr_polish(
+    arr: np.ndarray,
+    *,
+    saturation: float = 1.18,
+    midtone_contrast: float = 0.18,
+    highlight_rolloff: float = 0.92,
+) -> np.ndarray:
+    """Apply a gentle HDR-style polish to a normalised ``[0, 1]`` RGB array.
+
+    Three sequential passes, each conservative enough to preserve calibrated
+    star colours and the Hα signature on emission targets:
+
+    1. **S-curve on luminance** — a soft sigmoid centred on 0.5 lifts the
+       midtones while leaving deep sky and shadows untouched. Strength is
+       controlled by ``midtone_contrast`` (0 = identity, 0.3 = pronounced).
+    2. **Highlight rolloff** — values above ``highlight_rolloff`` are
+       compressed via ``tanh`` so bright stars never clip to pure white.
+    3. **Saturation boost** — chrominance is scaled in HSV space by
+       ``saturation`` (1.0 = identity). Hue is preserved exactly.
+
+    Args:
+        arr: Float array shaped ``(H, W)`` or ``(H, W, 3)`` with values in
+            ``[0, 1]``. Mono inputs skip the saturation pass.
+        saturation: Multiplicative gain on HSV S channel (≥ 0).
+        midtone_contrast: Strength of the midtone S-curve (0 disables).
+        highlight_rolloff: Threshold above which highlights are softly
+            compressed (set to 1.0 to disable).
+
+    Returns:
+        New array with the same shape and dtype as ``arr``, polished and
+        clipped to ``[0, 1]``.
+    """
+    out = np.clip(arr.astype(np.float32, copy=True), 0.0, 1.0)
+
+    # 1) Midtone S-curve. Acts as `out = out + k * sin(2π·out) / (2π)` which
+    #    is a smooth, monotonic, midtone-only contrast lift (no clipping risk).
+    if midtone_contrast > 0:
+        bump = np.sin(2.0 * np.pi * out) / (2.0 * np.pi)
+        out = np.clip(out + midtone_contrast * bump, 0.0, 1.0)
+
+    # 2) Highlight rolloff — soft tanh compression above the threshold.
+    if 0.0 < highlight_rolloff < 1.0:
+        excess = np.maximum(out - highlight_rolloff, 0.0)
+        # Compress the excess into the remaining [t, 1] range
+        compressed = np.tanh(excess / (1.0 - highlight_rolloff)) * (1.0 - highlight_rolloff)
+        out = np.where(out > highlight_rolloff, highlight_rolloff + compressed, out)
+
+    # 3) Saturation boost in HSV — only meaningful for RGB inputs.
+    if out.ndim == 3 and out.shape[2] == 3 and saturation != 1.0:
+        out = _boost_saturation_rgb(out, saturation)
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def _boost_saturation_rgb(rgb: np.ndarray, gain: float) -> np.ndarray:
+    """Multiply the HSV S channel of an RGB array by ``gain``.
+
+    Implemented in vectorised numpy without external dependencies. Hue and
+    Value are preserved bit-exact; only saturation changes.
+    """
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    cmax = np.max(rgb, axis=-1)
+    cmin = np.min(rgb, axis=-1)
+    delta = cmax - cmin
+
+    # New saturation: grey pixels (cmax==0 or delta==0) stay grey by construction.
+    safe_cmax = np.where(cmax > 0, cmax, 1.0)
+    s = delta / safe_cmax
+    s_new = np.clip(s * gain, 0.0, 1.0)
+
+    # Reconstruct chroma component then re-add to the value channel.
+    # For each pixel: new_min = cmax * (1 - s_new); the relative position of
+    # each channel inside [cmin, cmax] is preserved.
+    new_min = cmax * (1.0 - s_new)
+    safe_delta = np.where(delta > 0, delta, 1.0)
+
+    def _rescale(c: np.ndarray) -> np.ndarray:
+        # Map c from [cmin, cmax] to [new_min, cmax]
+        return new_min + (c - cmin) * (cmax - new_min) / safe_delta
+
+    out = np.stack([_rescale(r), _rescale(g), _rescale(b)], axis=-1)
+    # Pixels with delta==0 are achromatic — keep them as-is.
+    achromatic = delta == 0
+    if np.any(achromatic):
+        out[achromatic] = rgb[achromatic]
+    return out
+
