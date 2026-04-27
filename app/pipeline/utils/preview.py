@@ -72,6 +72,10 @@ def _generate_preview(fits_path: Path, output_path: Path) -> None:
             data = np.moveaxis(data, 0, -1)
             if data.shape[2] == 1:
                 data = data[:, :, 0]  # collapse single-channel to 2-D
+            elif data.shape[2] == 3:
+                # Siril stores colour FITS planes in B, G, R order.
+                # PIL assumes R, G, B — reverse to get correct colours.
+                data = data[:, :, ::-1].copy()
         # else: already (H, W, C) — unlikely from FITS but keep as-is
 
     # Percentile stretch to [0, 1]

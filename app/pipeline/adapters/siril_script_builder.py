@@ -95,9 +95,18 @@ class SirilScriptBuilder:
             Ordered list of Siril command strings.
         """
         commands: list[str] = ["load for_stretch"]
+        # rmgreen must run on linear (un-stretched) data to correctly remove
+        # the double-green artefact introduced by Bayer CFA debayering.
+        # Applying it after a non-linear stretch degrades colour accuracy.
+        if self.config.color_calibration_enabled:
+            commands.append("rmgreen")
         commands.extend(self._stretch_commands())
         if self.config.color_calibration_enabled:
-            commands.extend(self._color_commands())
+            # color_calibration measures the sky background and scales each
+            # channel so the background is neutral grey.  This is the primary
+            # tool for achieving accurate reds on emission nebulae (M42, etc.)
+            # without requiring plate-solving or WCS headers.
+            commands.append("color_calibration")
         commands.append("save for_stretch")
         commands.append("close")
         return commands
@@ -279,17 +288,16 @@ class SirilScriptBuilder:
     def _color_commands(self) -> list[str]:
         """Generate colour calibration commands.
 
-        ``rmgreen`` removes the DSLR green colour cast introduced during
-        debayering. It works on any loaded image with no prerequisites.
-
-        ``pcc`` (photometric colour calibration against GAIA) and ``spcc``
-        require a plate-solved image with WCS headers — that is handled by the
-        dedicated plate-solving pipeline step which runs after stretch.
+        This method is intentionally left empty: ``rmgreen`` is now applied
+        before the stretch (in ``build_postprocessing_commands``) so it works
+        on linear data, and ``color_calibration`` is applied after the stretch.
+        The method is retained for future use (e.g. ``pcc`` / ``spcc`` once
+        plate-solving is functional).
 
         Returns:
-            List of Siril colour calibration command strings.
+            Empty list (commands are inlined in ``build_postprocessing_commands``).
         """
-        return ["rmgreen"]
+        return []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

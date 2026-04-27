@@ -167,6 +167,11 @@ def _export_raster(
         arr = np.moveaxis(data, 0, -1)
         if arr.shape[2] == 1:
             arr = arr[:, :, 0]
+        elif arr.shape[2] == 3:
+            # Siril stores colour FITS planes in B, G, R order (internal
+            # convention). PIL Image.fromarray assumes R, G, B order, so
+            # reverse the channel axis to produce correct colours.
+            arr = arr[:, :, ::-1].copy()
     else:
         arr = data
 

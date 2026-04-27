@@ -54,11 +54,19 @@ RUN apt-get update \
 # ── Stage 3: ASTAP plate solver ───────────────────────────────────────────
 FROM siril-build AS astap-install
 
-# ASTAP plate solver — install via apt-get (not dpkg) so that declared
-# Depends: (Qt5, libGL, …) are resolved automatically.
-# libgtk2.0-0 (→ libgdk-x11-2.0 / libgtk-x11-2.0) is NOT listed in the
-# .deb Depends but is required at runtime by the ASTAP binary; install it
-# explicitly before the package so the linker finds it.
+# ASTAP plate solver — two binaries are installed:
+#
+#   astap      — full GUI binary (.deb, depends on Qt5/GTK).  Kept as a
+#                fallback and to provide the /opt/astap/ directory layout.
+#                Cannot be used headless (Gtk-WARNING: cannot open display).
+#
+#   astap_cli  — barebone headless command-line solver compiled without any
+#                GUI toolkit.  This is what the pipeline uses at runtime.
+#                "Barebone command-line solver compatible with the GUI version
+#                if renamed. No pop-up notifier." — https://www.hnsky.org/astap.htm
+#                Accepts all solver flags we use: -f, -r, -wcs, -d, -speed.
+#
+# libgtk2.0-0 is required by the GUI astap binary only (not by astap_cli).
 # Use wget with retries — curl + SourceForge redirect CDN can return 504.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgtk2.0-0 \
@@ -67,7 +75,14 @@ RUN apt-get update \
         -O /tmp/astap.deb \
     && apt-get install -y --no-install-recommends /tmp/astap.deb \
     && rm /tmp/astap.deb \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Download astap_cli — the true headless binary (no GTK, no display needed).
+    # Placed at /usr/local/bin so it is on PATH and takes precedence over the
+    # GUI astap binary at /opt/astap/astap.
+    && wget --tries=5 --waitretry=15 --timeout=120 -q \
+        "https://downloads.sourceforge.net/project/astap-program/linux_installer/astap_cli" \
+        -O /usr/local/bin/astap_cli \
+    && chmod +x /usr/local/bin/astap_cli
 
 # ── Stage 4: Python venv & dependencies ───────────────────────────────────
 FROM astap-install AS python-deps

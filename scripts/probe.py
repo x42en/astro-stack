@@ -426,21 +426,23 @@ async def check_siril() -> None:
 def check_astap() -> None:
     print(_section("5  ASTAP plate solver"))
 
-    binary_path = shutil.which("astap")
-    binary      = binary_path or "astap"
+    # Prefer astap_cli (headless, no display required) over the GUI astap
+    # binary which fails in Docker with "Gtk-WARNING: cannot open display".
+    binary_path = shutil.which("astap_cli") or shutil.which("astap")
+    binary      = binary_path or "astap_cli"
     rc, stdout, stderr = _run_cmd([binary, "-h"], timeout=10)
 
     if rc == -1:
-        print(_fail("astap not found in PATH"))
+        print(_fail("astap_cli not found in PATH (astap also absent)"))
         report.add("astap:binary", Level.CRITICAL, "not found")
         return
     if rc == -3:
-        print(_fail("astap: Permission denied -- binary is not executable"))
+        print(_fail("astap_cli: Permission denied -- binary is not executable"))
         report.add("astap:binary", Level.CRITICAL, "permission denied")
         return
     if rc == 127:
         # Exit 127 from execve = dynamic linker failed (missing .so files)
-        print(_fail("astap exits 127 -- dynamic linker error (missing shared libs)"))
+        print(_fail("astap_cli exits 127 -- dynamic linker error (missing shared libs)"))
         if binary_path:
             ldd_rc, ldd_out, _ = _run_cmd(["ldd", binary_path], timeout=5)
             missing = [line for line in ldd_out.splitlines() if "not found" in line]
@@ -457,7 +459,8 @@ def check_astap() -> None:
 
     # exit 0 or 1 both indicate a working binary (-h may not be a valid flag)
     version_line = (stdout + stderr).strip().splitlines()[0] if (stdout or stderr) else "?"
-    print(_ok(f"astap binary functional: {version_line[:80]}"))
+    binary_name = "astap_cli" if "astap_cli" in (binary_path or "") else "astap"
+    print(_ok(f"{binary_name} binary functional: {version_line[:80]}"))
     report.add("astap:binary", Level.OK, version_line[:60])
 
 
