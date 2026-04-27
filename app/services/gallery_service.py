@@ -59,6 +59,7 @@ class GalleryItem:
     """Augmented payload for a public gallery card."""
 
     session: AstroSession
+    job: PipelineJob
     job_id: uuid.UUID
     preview_path: str
 
@@ -210,6 +211,7 @@ class GalleryService:
             items.append(
                 GalleryItem(
                     session=session,
+                    job=job,
                     job_id=job.id,
                     preview_path=job.output_preview_path,
                 )

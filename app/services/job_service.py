@@ -80,10 +80,15 @@ class JobService:
             profile_id=profile_id,
             status=JobStatus.PENDING,
         )
+        # Resolve the effective profile up-front so we can both snapshot it
+        # on the job row and pass it to the ARQ task.  Snapshotting at
+        # creation time means later edits to the saved profile do not
+        # silently rewrite history.
+        profile_config = await self._resolve_profile_config(preset, profile_id)
+        job.profile_snapshot = profile_config.model_dump()
         created = await self._job_repo.create(job)
 
         # Enqueue ARQ task
-        profile_config = await self._resolve_profile_config(preset, profile_id)
         arq_pool = await get_arq_pool()
         try:
             arq_job = await arq_pool.enqueue_job(
@@ -162,6 +167,7 @@ class JobService:
             output_fits_path=job.output_fits_path,
             output_tiff_path=job.output_tiff_path,
             output_preview_path=job.output_preview_path,
+            profile_snapshot=job.profile_snapshot,
             created_at=job.created_at,
             steps=step_reads,
         )

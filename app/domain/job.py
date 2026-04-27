@@ -138,6 +138,15 @@ class PipelineJob(SQLModel, table=True):
     output_tiff_path: Optional[str] = Field(default=None, max_length=1024)
     output_preview_path: Optional[str] = Field(default=None, max_length=1024)
 
+    # Snapshot of the resolved processing profile used at job creation.
+    # Stored as JSONB so the UI can render the full parameter set even if
+    # the source preset / saved profile is later edited.  ``None`` for
+    # legacy jobs created before this column existed.
+    profile_snapshot: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(
@@ -263,5 +272,6 @@ class JobRead(SQLModel):
     output_fits_path: Optional[str]
     output_tiff_path: Optional[str]
     output_preview_path: Optional[str]
+    profile_snapshot: Optional[dict[str, Any]] = None
     created_at: datetime
     steps: list[JobStepRead] = Field(default_factory=list)

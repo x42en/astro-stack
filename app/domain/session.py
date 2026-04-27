@@ -13,9 +13,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from typing import Any
+
 from sqlmodel import Column, Field, SQLModel
 from sqlalchemy import DateTime, String, func
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 
 
 class SessionStatus(str, Enum):
@@ -108,6 +110,17 @@ class AstroSession(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
 
+    # Aggregated EXIF / FITS-header capture parameters across the light
+    # frames (ISO, exposure_seconds, f_number, focal_length_mm, camera_make,
+    # camera_model, lens_model, telescope, filter, temperature_c, plus a
+    # frame_count and total_integration_seconds).  See
+    # :func:`app.pipeline.utils.exif.extract_capture_metadata` for the full
+    # schema.  Stored as JSONB so the UI can render any subset.
+    capture_metadata: Optional[dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+    )
+
     # User-supplied target coordinates (J2000, decimal degrees).
     # When set, ASTAP plate-solve uses them as the search centre with a small
     # radius, dramatically improving solve speed and reliability.  These are
@@ -190,6 +203,7 @@ class SessionRead(SQLModel):
     target_ra: Optional[float]
     target_dec: Optional[float]
     acquired_at: Optional[datetime]
+    capture_metadata: Optional[dict[str, Any]] = None
     is_in_gallery: bool = False
     gallery_published_at: Optional[datetime] = None
     gallery_author_name: Optional[str] = None

@@ -16,7 +16,7 @@ email first.
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
@@ -45,6 +45,8 @@ class GalleryItemRead(BaseModel):
     acquired_at: Optional[str]
     download_count: int
     preview_url: str
+    capture_metadata: Optional[dict[str, Any]] = None
+    profile_summary: Optional[dict[str, Any]] = None
 
 
 class PublishRequest(BaseModel):
@@ -68,6 +70,39 @@ class DownloadRequestResponse(BaseModel):
 # ────────────────────────── Helpers ──────────────────────────────────
 
 
+# Distilled subset of profile fields exposed publicly via the gallery
+# payload.  We deliberately omit numeric tuning parameters: the public
+# audience cares about *which* tools were applied, not their exact
+# coefficients.  A future "View parameters" link from the owner UI can
+# fetch the full ``profile_snapshot`` from /jobs/{id}.
+_PROFILE_TOOL_FIELDS = (
+    "drizzle_enabled",
+    "plate_solving_enabled",
+    "gradient_removal_enabled",
+    "color_calibration_enabled",
+    "photometric_calibration_enabled",
+    "denoise_enabled",
+    "sharpen_enabled",
+    "super_resolution_enabled",
+    "star_separation_enabled",
+)
+
+
+def _build_profile_summary(item) -> Optional[dict[str, Any]]:
+    snapshot = item.job.profile_snapshot or None
+    preset = item.job.profile_preset
+    if snapshot is None and preset is None:
+        return None
+    summary: dict[str, Any] = {"preset": preset}
+    if snapshot:
+        tools = {k: bool(snapshot.get(k)) for k in _PROFILE_TOOL_FIELDS if k in snapshot}
+        if tools:
+            summary["tools"] = tools
+        if snapshot.get("stretch_method"):
+            summary["stretch_method"] = snapshot["stretch_method"]
+    return summary
+
+
 def _build_item(item, request: Request) -> GalleryItemRead:
     base = str(request.base_url).rstrip("/")
     return GalleryItemRead(
@@ -88,6 +123,8 @@ def _build_item(item, request: Request) -> GalleryItemRead:
         ),
         download_count=item.session.gallery_download_count,
         preview_url=f"{base}/api/v1/gallery/{item.session.id}/preview",
+        capture_metadata=item.session.capture_metadata,
+        profile_summary=_build_profile_summary(item),
     )
 
 
