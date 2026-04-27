@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.core.logging import get_logger
+from app.pipeline.utils.display import load_fits_display_rgb, to_uint8
 
 logger = get_logger(__name__)
 
@@ -25,8 +26,6 @@ _EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="preview_gen")
 
 _MAX_DIM = 1200
 _JPEG_QUALITY = 85
-_STRETCH_LOW = 0.1
-_STRETCH_HIGH = 99.9
 
 
 async def save_step_preview(fits_path: Path, output_path: Path) -> None:
@@ -41,51 +40,25 @@ async def save_step_preview(fits_path: Path, output_path: Path) -> None:
 
 
 def _generate_preview(fits_path: Path, output_path: Path) -> None:
-    """Synchronous FITS → JPEG conversion with percentile stretch.
+    """Synchronous FITS → JPEG conversion using the shared display stretch.
 
-    Handles both 2-D (grayscale) and 3-D (C × H × W RGB) FITS arrays.
-    NaN/inf values are zeroed. The image is resized to at most
-    :data:`_MAX_DIM` pixels on its longest side.
+    Handles both 2-D (grayscale) and 3-D (C × H × W RGB) FITS arrays via
+    :func:`app.pipeline.utils.display.load_fits_display_rgb`. The image is
+    resized to at most :data:`_MAX_DIM` pixels on its longest side.
 
     Args:
         fits_path: Source FITS file.
         output_path: Destination JPEG path.
     """
-    import numpy as np  # noqa: PLC0415
-    from astropy.io import fits as astrofits  # noqa: PLC0415
     from PIL import Image  # noqa: PLC0415
 
-    with astrofits.open(str(fits_path)) as hdul:
-        data = hdul[0].data
-
-    if data is None:
+    try:
+        data = load_fits_display_rgb(fits_path)
+    except ValueError:
         logger.warning("preview_fits_empty", path=str(fits_path))
         return
 
-    data = data.astype(np.float32)
-    data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Normalise axis layout to (H, W) or (H, W, 3)
-    if data.ndim == 3:
-        if data.shape[0] in (1, 3):
-            # FITS stores as (C, H, W) — move channels to last axis
-            data = np.moveaxis(data, 0, -1)
-            if data.shape[2] == 1:
-                data = data[:, :, 0]  # collapse single-channel to 2-D
-            elif data.shape[2] == 3:
-                # Siril stores colour FITS planes in B, G, R order.
-                # PIL assumes R, G, B — reverse to get correct colours.
-                data = data[:, :, ::-1].copy()
-        # else: already (H, W, C) — unlikely from FITS but keep as-is
-
-    # Percentile stretch to [0, 1]
-    lo, hi = np.percentile(data, [_STRETCH_LOW, _STRETCH_HIGH])
-    if hi <= lo:
-        hi = lo + 1.0
-    data = np.clip((data - lo) / (hi - lo), 0.0, 1.0)
-
-    arr8 = (data * 255).astype(np.uint8)
-
+    arr8 = to_uint8(data)
     if arr8.ndim == 2:
         img = Image.fromarray(arr8, mode="L").convert("RGB")
     else:

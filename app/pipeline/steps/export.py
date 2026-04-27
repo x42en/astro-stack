@@ -142,8 +142,10 @@ def _export_raster(
 ) -> None:
     """Convert a FITS image to TIFF, JPEG, and thumbnail.
 
-    Applies auto-stretch to map the 32-bit float FITS data to 8-bit/16-bit
-    display ranges. Uses astropy + Pillow.
+    Uses :func:`app.pipeline.utils.display.load_fits_display_rgb` to apply the
+    same per-channel percentile + asinh midtone stretch as the in-pipeline
+    previews. This guarantees the final ``preview.jpg`` matches the per-step
+    JPEGs the user has been seeing during processing.
 
     Args:
         fits_path: Source FITS file.
@@ -151,49 +153,26 @@ def _export_raster(
         jpeg_path: Output JPEG path (quality 95).
         thumb_path: Output PNG thumbnail (800px wide).
     """
-    import numpy as np  # noqa: PLC0415
-    from astropy.io import fits  # noqa: PLC0415
     from PIL import Image  # noqa: PLC0415
 
-    with fits.open(str(fits_path)) as hdul:
-        data = hdul[0].data
+    from app.pipeline.utils.display import (  # noqa: PLC0415
+        load_fits_display_rgb,
+        to_uint8,
+        to_uint16,
+    )
 
-    if data is None:
-        raise ValueError(f"FITS file {fits_path} has no image data.")
-
-    # Handle 3-channel (CxHxW) or 2D (HxW) arrays
-    if data.ndim == 3:
-        # Convert (C, H, W) → (H, W, C) for Pillow
-        arr = np.moveaxis(data, 0, -1)
-        if arr.shape[2] == 1:
-            arr = arr[:, :, 0]
-        elif arr.shape[2] == 3:
-            # Siril stores colour FITS planes in B, G, R order (internal
-            # convention). PIL Image.fromarray assumes R, G, B order, so
-            # reverse the channel axis to produce correct colours.
-            arr = arr[:, :, ::-1].copy()
-    else:
-        arr = data
-
-    # Sanitise non-finite values before any arithmetic (NaN/inf in FITS → bad casts)
-    arr = np.nan_to_num(arr.astype(np.float32), nan=0.0, posinf=1.0, neginf=0.0)
-
-    # Auto-stretch: clip to 0.01–99.99th percentile
-    lo, hi = np.percentile(arr, (0.01, 99.99))
-    if hi == lo:
-        hi = lo + 1.0
-    arr_norm = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
+    arr_norm = load_fits_display_rgb(fits_path)
 
     # 16-bit TIFF — PIL.fromarray does not support uint16 RGB;
     # use tifffile when available (installed via Cosmic Clarity requirements), else uint8.
-    arr_16 = (arr_norm * 65535).astype(np.uint16)
+    arr_16 = to_uint16(arr_norm)
     try:
         import tifffile as _tifffile  # noqa: PLC0415
         _photometric = "rgb" if arr_16.ndim == 3 and arr_16.shape[2] == 3 else "minisblack"
         _tifffile.imwrite(str(tiff_path), arr_16, photometric=_photometric, compression="deflate")
     except ImportError:
         # Fallback: 8-bit TIFF (PIL uint16 RGB is unsupported)
-        arr_fb = (arr_norm * 255).astype(np.uint8)
+        arr_fb = to_uint8(arr_norm)
         img_fb = (
             Image.fromarray(arr_fb)
             if arr_fb.ndim == 2
@@ -202,10 +181,12 @@ def _export_raster(
         img_fb.save(str(tiff_path), format="TIFF", compression="tiff_deflate")
 
     # JPEG (8-bit)
-    arr_8 = (arr_norm * 255).astype(np.uint8)
-    img_8 = Image.fromarray(arr_8)
-    if img_8.mode == "I;16":
-        img_8 = img_8.convert("L")
+    arr_8 = to_uint8(arr_norm)
+    img_8 = (
+        Image.fromarray(arr_8, mode="L").convert("RGB")
+        if arr_8.ndim == 2
+        else Image.fromarray(arr_8, mode="RGB")
+    )
     img_8.save(str(jpeg_path), format="JPEG", quality=95)
 
     # Thumbnail (800px wide)

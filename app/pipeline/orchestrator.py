@@ -52,8 +52,9 @@ logger = get_logger(__name__)
 def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     """Render a processed FITS image to a JPEG preview (sync, run in thread).
 
-    Applies percentile stretching to map float32 data to 8-bit display range.
-    Handles both monochrome (H×W) and colour (C×H×W or H×W×C) FITS layouts.
+    Delegates to the shared display stretch in
+    :mod:`app.pipeline.utils.display` so that step previews and the final
+    export use identical rendering parameters.
 
     Args:
         fits_path: Source FITS file produced by a pipeline step.
@@ -62,45 +63,28 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     import io as _io  # noqa: PLC0415
     from pathlib import Path as _Path  # noqa: PLC0415
 
-    import numpy as np  # noqa: PLC0415
-    from astropy.io import fits as _fits  # noqa: PLC0415
     from PIL import Image  # noqa: PLC0415
+
+    from app.pipeline.utils.display import (  # noqa: PLC0415
+        load_fits_display_rgb,
+        to_uint8,
+    )
 
     output_path = _Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with _fits.open(str(fits_path)) as hdul:
-        data: np.ndarray | None = None
-        for hdu in hdul:
-            if hdu.data is not None and hdu.data.ndim >= 2:
-                data = np.array(hdu.data, dtype=np.float32)
-                break
-
-    if data is None:
+    try:
+        data = load_fits_display_rgb(fits_path)
+    except ValueError:
         logger.warning("fits_preview_no_data", path=str(fits_path))
         return
 
-    # Normalise axis order: ensure (H, W) or (H, W, C)
-    if data.ndim == 3:
-        if data.shape[0] <= 4:
-            # (C, H, W) → (H, W, C)
-            data = np.moveaxis(data, 0, -1)
-        if data.shape[2] == 1:
-            data = data[:, :, 0]
-        elif data.shape[2] == 3:
-            # Siril stores colour FITS planes in B, G, R order (internal
-            # convention).  PIL Image.fromarray assumes the first channel is R,
-            # so reverse the channel axis to get correct R, G, B rendering.
-            data = data[:, :, ::-1].copy()
-
-    # Replace NaN / Inf values before stretch to avoid RuntimeWarning on cast
-    data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-
-    lo, hi = np.percentile(data, [1.0, 99.5])
-    data = np.clip((data - lo) / max(float(hi - lo), 1e-6), 0.0, 1.0)
-
-    arr_8 = (data * 255).astype(np.uint8)
-    img = Image.fromarray(arr_8, mode="L").convert("RGB") if arr_8.ndim == 2 else Image.fromarray(arr_8)
+    arr_8 = to_uint8(data)
+    img = (
+        Image.fromarray(arr_8, mode="L").convert("RGB")
+        if arr_8.ndim == 2
+        else Image.fromarray(arr_8, mode="RGB")
+    )
     img.thumbnail((900, 900), Image.LANCZOS)
 
     buf = _io.BytesIO()
