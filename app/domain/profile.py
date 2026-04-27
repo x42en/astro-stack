@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import Boolean, DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlmodel import Column, Field, SQLModel
 
@@ -242,6 +242,26 @@ class ProcessingProfile(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False),
     )
+
+    # Sharing: when ``is_shared`` is True the profile is visible (read-only)
+    # to every authenticated user via ``GET /profiles``.  Other users may
+    # duplicate it to obtain an editable private copy.  ``shared_at`` is
+    # stamped on the first toggle and never cleared automatically.
+    is_shared: bool = Field(
+        default=False,
+        sa_column=Column(
+            "is_shared",
+            Boolean(),
+            nullable=False,
+            index=True,
+            server_default="false",
+        ),
+    )
+    shared_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),
@@ -279,6 +299,13 @@ class ProcessingProfileRead(SQLModel):
 
     Attributes:
         id: Profile UUID.
+        owner_user_id: ID of the owner; ``None`` for anonymous-mode or system
+            profiles.
+        is_shared: Whether the profile is publicly visible to other
+            authenticated users.
+        shared_at: Timestamp of the first share.
+        is_owner: True when the requesting user owns this profile (or when
+            running in anonymous/no-auth mode).  Computed server-side.
         name: Display name.
         description: Optional description.
         config: Parameter set as dict.
@@ -287,6 +314,10 @@ class ProcessingProfileRead(SQLModel):
     """
 
     id: uuid.UUID
+    owner_user_id: Optional[uuid.UUID] = None
+    is_shared: bool = False
+    shared_at: Optional[datetime] = None
+    is_owner: bool = True
     name: str
     description: Optional[str]
     config: dict[str, Any]
