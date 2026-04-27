@@ -7,10 +7,24 @@ The pipeline historically used three different percentile stretches
 (``0.01/99.99``, ``0.1/99.9`` and ``1.0/99.5``), which made the final export
 look much darker than the intermediate previews. This module unifies them.
 
-The display stretch is intentionally **per-channel**: for an
-un-photometrically-calibrated stack (e.g. when ASTAP plate-solving fails and
-Siril ``pcc`` cannot run) this acts as a gray-world correction and removes
-the systematic yellow/green cast caused by an unbalanced sky background.
+Colour-stretch strategy — **split black-point / global white-point**:
+
+The naive options both fail on uncalibrated DSLR data:
+
+* **Pure global** (single percentile shared across R/G/B) keeps the natural
+  channel ratios but never neutralises the sky background → yellow/green cast.
+* **Pure per-channel** (independent percentile per R/G/B) removes the cast but
+  also normalises the *signal*, so an emission-line target like M42 (strongly
+  Hα-dominated) loses its red signature and becomes uniformly grey/blue.
+
+The accepted astrophoto convention — and what we apply here — is to combine
+the two:
+
+* The **black point** (low percentile) is computed **per channel**: this
+  subtracts the per-channel sky background, which is what causes the cast.
+* The **white point** (high percentile) is computed **globally** across all
+  three channels: this preserves the natural emission-line dominance because
+  a brighter channel keeps its higher post-clip values.
 """
 
 from __future__ import annotations
@@ -107,19 +121,33 @@ def _stretch_array(
     """Apply a percentile clip + optional asinh midtone stretch.
 
     See :func:`load_fits_display_rgb` for argument semantics.
+
+    For 3-channel RGB data with ``per_channel=True`` this implements the
+    *split BP/WP* policy described in the module docstring: the low percentile
+    (black point) is computed **per channel** but the high percentile
+    (white point) is computed **globally** across all channels so the natural
+    colour balance of the signal is preserved.
     """
     arr = np.ascontiguousarray(arr, dtype=np.float32)
 
     if arr.ndim == 3 and arr.shape[-1] == 3 and per_channel:
+        # Per-channel black point — neutralises sky background cast.
+        lo = np.array(
+            [np.percentile(arr[..., c], low_pct) for c in range(3)],
+            dtype=np.float32,
+        )
+        # Global white point — preserves emission-line channel dominance
+        # (e.g. Hα-rich M42 stays red; Oxygen-III-rich M27 stays teal).
+        hi = float(np.percentile(arr, high_pct))
+
         out = np.empty_like(arr)
         for c in range(3):
-            out[..., c] = _stretch_2d(
-                arr[..., c],
-                low_pct=low_pct,
-                high_pct=high_pct,
-                asinh_strength=asinh_strength,
-            )
-        return out
+            denom = max(hi - float(lo[c]), 1e-12)
+            out[..., c] = np.clip((arr[..., c] - lo[c]) / denom, 0.0, 1.0)
+
+        if asinh_strength > 0.0:
+            out = np.arcsinh(asinh_strength * out) / np.arcsinh(asinh_strength)
+        return out.astype(np.float32, copy=False)
 
     return _stretch_2d(
         arr if arr.ndim == 2 else arr.reshape(arr.shape[0], -1),

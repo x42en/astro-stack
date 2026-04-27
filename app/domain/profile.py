@@ -70,7 +70,7 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Plate solving ─────────────────────────────────────────────────────────
     plate_solving_enabled: bool = True
-    plate_solving_radius_deg: float = 30.0
+    plate_solving_radius_deg: float = 180.0
     plate_solving_speed: str = "auto"  # auto|slow|fast
 
     # ── Gradient removal ──────────────────────────────────────────────────────
@@ -90,8 +90,8 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Sharpen ───────────────────────────────────────────────────────────────
     sharpen_enabled: bool = True
-    sharpen_stellar_amount: float = 0.5
-    sharpen_nonstellar_amount: float = 0.7
+    sharpen_stellar_amount: float = 0.3
+    sharpen_nonstellar_amount: float = 0.4
     sharpen_radius: int = 2
 
     # ── Super-resolution ──────────────────────────────────────────────────────
@@ -136,8 +136,8 @@ PRESET_STANDARD = ProcessingProfileConfig(
     denoise_enabled=True,
     denoise_strength=0.8,
     sharpen_enabled=True,
-    sharpen_stellar_amount=0.5,
-    sharpen_nonstellar_amount=0.7,
+    sharpen_stellar_amount=0.3,
+    sharpen_nonstellar_amount=0.4,
     super_resolution_enabled=False,
     star_separation_enabled=False,
 )

@@ -57,7 +57,7 @@ class PlateSolvingStep(PipelineStep):
 
         result = await self._adapter.solve(
             fits_path=context.stacked_fits_path,
-            search_radius_deg=float(config.get("plate_solving_radius_deg", 30.0)),
+            search_radius_deg=float(config.get("plate_solving_radius_deg", 180.0)),
             speed=str(config.get("plate_solving_speed", "auto")),
         )
 

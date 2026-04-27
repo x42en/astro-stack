@@ -62,7 +62,7 @@ class AstapAdapter:
     async def solve(
         self,
         fits_path: Path,
-        search_radius_deg: float = 30.0,
+        search_radius_deg: float = 180.0,
         speed: str = "auto",
         timeout: float = 120.0,
     ) -> dict[str, Any]:
