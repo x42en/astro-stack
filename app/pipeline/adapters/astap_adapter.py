@@ -65,6 +65,9 @@ class AstapAdapter:
         search_radius_deg: float = 180.0,
         speed: str = "auto",
         timeout: float = 120.0,
+        target_ra_deg: Optional[float] = None,
+        target_dec_deg: Optional[float] = None,
+        hint_radius_deg: float = 5.0,
     ) -> dict[str, Any]:
         """Run ASTAP plate solving on a FITS file.
 
@@ -73,9 +76,22 @@ class AstapAdapter:
 
         Args:
             fits_path: Path to the stacked FITS file to solve.
-            search_radius_deg: Search radius in degrees around the image centre.
+            search_radius_deg: Search radius in degrees around the image centre,
+                used as the **fallback** blind-solve radius when no target
+                hint is supplied. ASTAP starts from RA=0/Dec=0, so this needs
+                to be 180° to cover the whole sky.
             speed: ASTAP solver speed: ``auto``, ``fast``, or ``slow``.
             timeout: Maximum execution time in seconds.
+            target_ra_deg: Optional user-supplied right ascension (J2000
+                decimal degrees) used as the search centre. When provided the
+                solver runs in *targeted* mode with ``hint_radius_deg``
+                instead of a 180° blind solve, which is far faster and far
+                more reliable on noisy DSLR stacks.
+            target_dec_deg: Optional user-supplied declination (J2000 decimal
+                degrees), companion of ``target_ra_deg``.
+            hint_radius_deg: Search radius applied around the user hint.
+                5° is generous enough to absorb GoTo / framing errors while
+                still being orders of magnitude faster than a blind solve.
 
         Returns:
             Dict with ``ra`` (float, degrees), ``dec`` (float, degrees), and
@@ -92,7 +108,14 @@ class AstapAdapter:
                 retryable=False,
             )
 
-        cmd = self._build_command(fits_path, search_radius_deg, speed)
+        cmd = self._build_command(
+            fits_path,
+            search_radius_deg,
+            speed,
+            target_ra_deg=target_ra_deg,
+            target_dec_deg=target_dec_deg,
+            hint_radius_deg=hint_radius_deg,
+        )
         logger.info("astap_solving", fits=str(fits_path), cmd=" ".join(cmd))
 
         try:
@@ -153,13 +176,26 @@ class AstapAdapter:
         fits_path: Path,
         search_radius_deg: float,
         speed: str,
+        *,
+        target_ra_deg: Optional[float] = None,
+        target_dec_deg: Optional[float] = None,
+        hint_radius_deg: float = 5.0,
     ) -> list[str]:
         """Build the ASTAP command-line invocation.
 
+        When ``target_ra_deg`` and ``target_dec_deg`` are both provided, ASTAP
+        is invoked in *targeted* mode using its ``-ra`` (RA in **hours**) and
+        ``-spd`` (south polar distance, i.e. ``Dec + 90`` in degrees) options
+        plus a small search radius. Otherwise it falls back to the blind-solve
+        radius supplied as ``search_radius_deg``.
+
         Args:
             fits_path: Input FITS file path.
-            search_radius_deg: Search radius in degrees.
+            search_radius_deg: Blind-solve search radius in degrees.
             speed: Solver speed mode.
+            target_ra_deg: Optional user RA hint (J2000 decimal degrees).
+            target_dec_deg: Optional user Dec hint (J2000 decimal degrees).
+            hint_radius_deg: Radius used when a target hint is supplied.
 
         Returns:
             List of command tokens ready for :func:`asyncio.create_subprocess_exec`.
@@ -168,10 +204,19 @@ class AstapAdapter:
             self.binary,
             "-f",
             str(fits_path),
-            "-r",
-            str(int(search_radius_deg)),
             "-wcs",
         ]
+        if target_ra_deg is not None and target_dec_deg is not None:
+            # ASTAP CLI: -ra in HOURS (0..24), -spd = Dec + 90 in DEGREES (0..180)
+            ra_hours = float(target_ra_deg) / 15.0
+            spd_deg = float(target_dec_deg) + 90.0
+            cmd += [
+                "-ra", f"{ra_hours:.6f}",
+                "-spd", f"{spd_deg:.6f}",
+                "-r", str(int(round(hint_radius_deg))),
+            ]
+        else:
+            cmd += ["-r", str(int(search_radius_deg))]
         if speed != "auto":
             cmd += ["-speed", speed]
         if self.star_db_path:

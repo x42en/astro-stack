@@ -97,6 +97,8 @@ async def upload_chunk(
     x_session_id: Optional[str] = Header(default=None, alias="X-Session-ID"),
     x_session_name: Optional[str] = Header(default=None, alias="X-Session-Name"),
     x_object_name: Optional[str] = Header(default=None, alias="X-Object-Name"),
+    x_target_ra: Optional[str] = Header(default=None, alias="X-Target-RA"),
+    x_target_dec: Optional[str] = Header(default=None, alias="X-Target-Dec"),
     x_upload_id: Optional[str] = Header(default=None, alias="X-Upload-ID"),
     upload_chunk: int = Header(alias="Upload-Chunk"),
     upload_total_chunks: int = Header(alias="Upload-Total-Chunks"),
@@ -113,6 +115,8 @@ async def upload_chunk(
         x_session_id: Existing session UUID; omit to create a new session.
         x_session_name: Human-readable session name (required when creating).
         x_object_name: Optional target object name stored on the session.
+        x_target_ra: Optional user-supplied right ascension hint (J2000, degrees).
+        x_target_dec: Optional user-supplied declination hint (J2000, degrees).
         x_upload_id: Upload token from the first chunk response.
         upload_chunk: Zero-based index of this chunk.
         upload_total_chunks: Total number of chunks for this file.
@@ -140,6 +144,16 @@ async def upload_chunk(
             )
         session_uuid = uuid.uuid4()
         session_inbox_path = Path(settings.inbox_path) / str(session_uuid)
+        # Parse optional target coordinate headers; any malformed value is
+        # silently ignored so a typo never blocks the upload itself.
+        try:
+            target_ra_val = float(x_target_ra) if x_target_ra else None
+        except (TypeError, ValueError):
+            target_ra_val = None
+        try:
+            target_dec_val = float(x_target_dec) if x_target_dec else None
+        except (TypeError, ValueError):
+            target_dec_val = None
         new_session = AstroSession(
             id=session_uuid,
             name=x_session_name,
@@ -147,6 +161,8 @@ async def upload_chunk(
             status=SessionStatus.PENDING,
             input_format=None,
             object_name=x_object_name or None,
+            target_ra=target_ra_val,
+            target_dec=target_dec_val,
         )
         await service._session_repo.create(new_session)
 

@@ -105,7 +105,7 @@ RUN pip install \
         arq "redis[hiredis]" \
         pydantic pydantic-settings \
         "python-jose[cryptography]" "passlib[bcrypt]" \
-        httpx astropy rawpy numpy Pillow \
+        httpx astropy astroquery rawpy numpy Pillow \
         watchdog python-multipart aiofiles anyio structlog \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu

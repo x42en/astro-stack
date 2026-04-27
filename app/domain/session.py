@@ -100,6 +100,13 @@ class AstroSession(SQLModel, table=True):
     ra: Optional[float] = Field(default=None)
     dec: Optional[float] = Field(default=None)
 
+    # User-supplied target coordinates (J2000, decimal degrees).
+    # When set, ASTAP plate-solve uses them as the search centre with a small
+    # radius, dramatically improving solve speed and reliability.  These are
+    # NOT overwritten by the plate-solve result (which populates ra/dec).
+    target_ra: Optional[float] = Field(default=None)
+    target_dec: Optional[float] = Field(default=None)
+
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(
@@ -163,6 +170,8 @@ class SessionRead(SQLModel):
     object_name: Optional[str]
     ra: Optional[float]
     dec: Optional[float]
+    target_ra: Optional[float]
+    target_dec: Optional[float]
     created_at: datetime
     updated_at: datetime
 
@@ -175,8 +184,12 @@ class SessionUpdate(SQLModel):
         name: New human-readable name.
         status: Target status (restricted transitions enforced by the service).
         object_name: Override resolved object name.
+        target_ra: User-supplied target right ascension (J2000, degrees).
+        target_dec: User-supplied target declination (J2000, degrees).
     """
 
     name: Optional[str] = Field(default=None, max_length=255)
     status: Optional[SessionStatus] = None
     object_name: Optional[str] = Field(default=None, max_length=255)
+    target_ra: Optional[float] = Field(default=None)
+    target_dec: Optional[float] = Field(default=None)

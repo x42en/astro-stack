@@ -55,10 +55,14 @@ class PlateSolvingStep(PipelineStep):
             logger.warning("plate_solving_skipped", reason="no stacked FITS in context")
             return StepResult(success=True, skipped=True, message="No stacked FITS available.")
 
+        target_ra = context.metadata.get("target_ra")
+        target_dec = context.metadata.get("target_dec")
         result = await self._adapter.solve(
             fits_path=context.stacked_fits_path,
             search_radius_deg=float(config.get("plate_solving_radius_deg", 180.0)),
             speed=str(config.get("plate_solving_speed", "auto")),
+            target_ra_deg=float(target_ra) if target_ra is not None else None,
+            target_dec_deg=float(target_dec) if target_dec is not None else None,
         )
 
         context.metadata.update(result)

@@ -627,6 +627,11 @@ class PipelineOrchestrator:
 
         context.metadata["frames"] = frames
         context.metadata["input_format"] = input_format
+        # Make user-supplied target hint available to the plate-solving step.
+        # Stored as raw floats (J2000 decimal degrees) or None.
+        context.metadata["target_ra"] = session_record.target_ra
+        context.metadata["target_dec"] = session_record.target_dec
+        context.metadata["object_name_hint"] = session_record.object_name
 
     @staticmethod
     def _restore_context_paths(
