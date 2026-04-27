@@ -101,12 +101,10 @@ class SirilScriptBuilder:
         if self.config.color_calibration_enabled:
             commands.append("rmgreen")
         commands.extend(self._stretch_commands())
-        if self.config.color_calibration_enabled:
-            # color_calibration measures the sky background and scales each
-            # channel so the background is neutral grey.  This is the primary
-            # tool for achieving accurate reds on emission nebulae (M42, etc.)
-            # without requiring plate-solving or WCS headers.
-            commands.append("color_calibration")
+        # NOTE: 'color_calibration' is a GUI-only feature in Siril 1.4.x and
+        # is NOT available as a script command.  'rmgreen' (applied above on
+        # linear data) is the only non-plate-solving colour correction that
+        # can be used in headless scripts.
         commands.append("save for_stretch")
         commands.append("close")
         return commands
@@ -288,9 +286,10 @@ class SirilScriptBuilder:
     def _color_commands(self) -> list[str]:
         """Generate colour calibration commands.
 
-        This method is intentionally left empty: ``rmgreen`` is now applied
+        This method is intentionally left empty: ``rmgreen`` is applied
         before the stretch (in ``build_postprocessing_commands``) so it works
-        on linear data, and ``color_calibration`` is applied after the stretch.
+        on linear data.  ``color_calibration`` is a GUI-only command in Siril
+        1.4.x and cannot be used in scripts.
         The method is retained for future use (e.g. ``pcc`` / ``spcc`` once
         plate-solving is functional).
 
