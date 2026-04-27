@@ -12,6 +12,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -59,7 +60,7 @@ class GraXpertAdapter:
         input_path: Path,
         output_path: Path,
         method: str = "ai",
-        ai_model: str = "GraXpert-AI-1.0.0",
+        ai_model: str = "1.0.0",
         timeout: float = 600.0,
     ) -> None:
         """Remove the sky gradient and background from a FITS image.
@@ -68,28 +69,42 @@ class GraXpertAdapter:
             input_path: Path to the stacked FITS file.
             output_path: Desired output FITS path for the background-corrected image.
             method: Extraction method: ``"ai"`` (U-Net) or ``"polynomial"``.
-            ai_model: Name of the GraXpert AI model to use.
+            ai_model: GraXpert AI model **version** (must match
+                ``^\d+\.\d+\.\d+$``, e.g. ``"1.0.0"``). For backward
+                compatibility, a leading ``"GraXpert-AI-"`` prefix is stripped.
             timeout: Maximum execution time in seconds.
 
         Raises:
             PipelineStepException: If GraXpert cannot be found or fails.
         """
+        # GraXpert validates -ai_version against ^\d+\.\d+\.\d+$ and rejects
+        # anything else with argparse exit 2.  Strip the legacy prefix if a
+        # stored profile still uses the old "GraXpert-AI-1.0.0" form.
+        ai_version = _normalize_ai_version(ai_model)
+
+        # GraXpert's -output flag is a *basename without extension* — it always
+        # writes the result next to the input as ``<input_dir>/<output>.fits``.
+        # We pass a unique stem and move the produced file to the requested
+        # output_path after the run.
+        output_stem = f"{input_path.stem}_GraXpertBGE"
+        produced = input_path.parent / f"{output_stem}{input_path.suffix or '.fits'}"
+
         # GraXpert can be invoked as a Python module or as an installed CLI entry-point
         graxpert_main = self.source_path / "GraXpert.py"
         if not graxpert_main.exists():
             cmd = self._build_command_installed(
                 input_path=input_path,
-                output_path=output_path,
+                output_stem=output_stem,
                 method=method,
-                ai_model=ai_model,
+                ai_version=ai_version,
             )
         else:
             cmd = self._build_command_script(
                 script=graxpert_main,
                 input_path=input_path,
-                output_path=output_path,
+                output_stem=output_stem,
                 method=method,
-                ai_model=ai_model,
+                ai_version=ai_version,
             )
 
         logger.info("graxpert_starting", input=str(input_path), method=method)
@@ -126,6 +141,19 @@ class GraXpertAdapter:
                 details={"returncode": proc.returncode, "stderr": stderr_text},
             )
 
+        # Move the file produced next to the input to the requested output path.
+        if not produced.exists():
+            raise PipelineStepException(
+                ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
+                f"GraXpert did not produce expected output: {produced}",
+                step_name="gradient_removal",
+                retryable=False,
+            )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            output_path.unlink()
+        produced.rename(output_path)
+
         logger.info("graxpert_done", output=str(output_path))
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -144,18 +172,19 @@ class GraXpertAdapter:
         self,
         script: Path,
         input_path: Path,
-        output_path: Path,
+        output_stem: str,
         method: str,
-        ai_model: str,
+        ai_version: str,
     ) -> list[str]:
         """Build the command to invoke GraXpert as a Python script.
 
         Args:
             script: Path to ``GraXpert.py``.
             input_path: Input FITS path.
-            output_path: Output FITS path.
+            output_stem: Output basename without extension (GraXpert appends
+                ``.fits``/``.xisf`` and writes next to the input).
             method: Extraction method (``ai`` or ``polynomial``).
-            ai_model: AI model version string.
+            ai_version: AI model version string (semver, e.g. ``"1.0.0"``).
 
         Returns:
             Command token list.
@@ -163,34 +192,34 @@ class GraXpertAdapter:
         # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
         # Without it the script prints usage help and exits 2.
         # Algorithm selection: polynomial/Splines is the default when -ai_version
-        # is omitted; AI mode requires -ai_version <model>.
-        # Note: -background_extraction_algo is NOT a valid CLI flag in GraXpert 3.x.
+        # is omitted; AI mode requires -ai_version <semver>.
         cmd = [
             sys.executable,
             str(script),
             "-cli",
             "-cmd", "background-extraction",
-            "-output", str(output_path),
+            "-output", output_stem,
             "-gpu", self._gpu_flag(),
         ]
         if method == "ai":
-            cmd += ["-ai_version", ai_model]
+            cmd += ["-ai_version", ai_version]
         return cmd + [str(input_path)]
 
     def _build_command_installed(
         self,
         input_path: Path,
-        output_path: Path,
+        output_stem: str,
         method: str,
-        ai_model: str,
+        ai_version: str,
     ) -> list[str]:
         """Build the command when GraXpert is installed as a package.
 
         Args:
             input_path: Input FITS path.
-            output_path: Output FITS path.
+            output_stem: Output basename without extension (GraXpert appends
+                the extension and writes next to the input).
             method: Extraction method.
-            ai_model: AI model version string.
+            ai_version: AI model version string (semver, e.g. ``"1.0.0"``).
 
         Returns:
             Command token list.
@@ -198,15 +227,51 @@ class GraXpertAdapter:
         # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
         # Without it the entry-point prints usage help and exits 2.
         # Algorithm selection: polynomial/Splines is the default when -ai_version
-        # is omitted; AI mode requires -ai_version <model>.
-        # Note: -background_extraction_algo is NOT a valid CLI flag in GraXpert 3.x.
+        # is omitted; AI mode requires -ai_version <semver>.
         cmd = [
             "graxpert",
             "-cli",
             "-cmd", "background-extraction",
-            "-output", str(output_path),
+            "-output", output_stem,
             "-gpu", self._gpu_flag(),
         ]
         if method == "ai":
-            cmd += ["-ai_version", ai_model]
+            cmd += ["-ai_version", ai_version]
         return cmd + [str(input_path)]
+
+
+_AI_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def _normalize_ai_version(ai_model: str) -> str:
+    """Coerce a profile ``ai_model`` value into the bare semver GraXpert expects.
+
+    GraXpert validates ``-ai_version`` against ``^\\d+\\.\\d+\\.\\d+$`` and
+    rejects anything else with argparse exit code 2. Older AstroStack profiles
+    used the form ``"GraXpert-AI-1.0.0"`` (a model filename, not a version);
+    strip such prefixes for backward compatibility.
+
+    Args:
+        ai_model: Value from the profile (e.g. ``"1.0.0"`` or
+            ``"GraXpert-AI-1.0.0"``).
+
+    Returns:
+        A semver string suitable for ``-ai_version``.
+    """
+    candidate = ai_model.strip()
+    for prefix in ("GraXpert-AI-", "GraXpert-"):
+        if candidate.startswith(prefix):
+            candidate = candidate[len(prefix):]
+            break
+    for ext in (".pth", ".onnx"):
+        if candidate.endswith(ext):
+            candidate = candidate[: -len(ext)]
+            break
+    if not _AI_VERSION_RE.match(candidate):
+        logger.warning(
+            "graxpert_ai_version_invalid",
+            provided=ai_model,
+            fallback="1.0.0",
+        )
+        return "1.0.0"
+    return candidate

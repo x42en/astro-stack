@@ -76,7 +76,7 @@ class ProcessingProfileConfig(SQLModel):
     # ── Gradient removal ──────────────────────────────────────────────────────
     gradient_removal_enabled: bool = True
     gradient_removal_method: str = "ai"  # ai|polynomial
-    gradient_removal_ai_model: str = "GraXpert-AI-1.0.0"
+    gradient_removal_ai_model: str = "1.0.1"
 
     # ── Stretch & colour ─────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear

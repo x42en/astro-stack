@@ -92,7 +92,8 @@ class Settings(BaseSettings):
 
     # ── GraXpert ──────────────────────────────────────────────────────────────
     graxpert_source_path: str = "/opt/graxpert"
-    graxpert_ai_model: str = "GraXpert-AI-1.0.0"
+    # AI model version (must match GraXpert's regex ^\d+\.\d+\.\d+$).
+    graxpert_ai_model: str = "1.0.1"
 
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"

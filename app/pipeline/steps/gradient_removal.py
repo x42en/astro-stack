@@ -31,7 +31,7 @@ class GradientRemovalStep(PipelineStep):
         """Check if the GraXpert AI model is available.
 
         Args:
-            ai_model: Name of the AI model (e.g., "GraXpert-AI-1.0.0").
+            ai_model: Name of the AI model (e.g., "1.0.1").
 
         Returns:
             True if model files exist, False otherwise.
@@ -77,7 +77,7 @@ class GradientRemovalStep(PipelineStep):
 
         # Determine method: use AI if model is available, else fallback to polynomial
         requested_method = config.get("gradient_removal_method", "ai")
-        ai_model = config.get("gradient_removal_ai_model", "GraXpert-AI-1.0.0")
+        ai_model = config.get("gradient_removal_ai_model", "1.0.1")
 
         method = requested_method
         if requested_method == "ai" and not self._is_ai_model_available(ai_model):
