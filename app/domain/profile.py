@@ -42,9 +42,16 @@ class ProcessingProfileConfig(SQLModel):
         stretch_method: Stretch algorithm applied after stacking.
         stretch_strength: Strength parameter for asinh stretch.
         color_calibration_enabled: Whether to run photometric color calibration.
+        camera_defiltered: Acquisition hardware hint.  ``True`` (default) for
+            defiltered DSLR / dedicated OSC astro cameras (the norm in modern
+            astrophotography).  Set ``False`` for a stock DSLR with full
+            IR-cut filter; the display pipeline then preserves the faint
+            residual H\u03b1 with a softened red black-point and a mild red
+            saturation boost.
         photometric_calibration_enabled: Whether to run Siril ``pcc`` (requires
-            plate-solve).  Recommended only for defiltered/OSC astro cameras;
-            on stock DSLR it tends to neutralise residual H\u03b1.
+            plate-solve).  Independent from ``camera_defiltered``: kept
+            opt-in because catalogue lookup may fail on small FOV / sparse
+            star fields.
         denoise_enabled: Whether to run Cosmic Clarity Denoise.
         denoise_strength: Denoise strength (0.0–1.0).
         denoise_luminance_only: Apply denoise to luminance channel only.
@@ -85,19 +92,31 @@ class ProcessingProfileConfig(SQLModel):
     stretch_method: str = "asinh"  # asinh|auto|linear
     stretch_strength: float = 150.0
     color_calibration_enabled: bool = True
+    # ``camera_defiltered`` describes the **acquisition hardware**, not a
+    # processing toggle.  When ``True`` (default — the norm in modern
+    # astrophotography) the imager is assumed to have a broad spectral
+    # response across R/G/B (defiltered DSLR, dedicated OSC astro camera).
+    # The display pipeline then keeps its standard split black-point /
+    # global white-point policy and a neutral saturation.
+    # When ``False`` (stock DSLR with full IR-cut filter) the red channel is
+    # heavily attenuated; the display pipeline applies a softened red
+    # black-point and a mild red/saturation boost so the residual Hα signal
+    # of emission targets is not crushed.
+    camera_defiltered: bool = True
     # Photometric Colour Calibration (Siril `pcc`) rescales each channel to
-    # match a stellar B-V catalogue.  This is appropriate for cameras with
-    # broadband response across all three channels (defiltered DSLR, dedicated
-    # OSC astro camera).  On a stock DSLR the IR-cut filter strongly
-    # attenuates Hα so the red channel carries proportionally more noise than
-    # signal; PCC then equalises noise rather than signal and washes out the
-    # nebular colour.  Default OFF for camera-agnostic safety; opt-in via the
-    # QUALITY preset or per-profile.
+    # match a stellar B-V catalogue.  Independent from ``camera_defiltered``:
+    # PCC requires a successful plate-solve and an internet catalogue lookup,
+    # which can fail silently on small FOV or with sparse star fields.  Kept
+    # strictly opt-in to avoid surprising the user.  Recommended on
+    # defiltered/OSC cameras when plate-solving is reliable.
     photometric_calibration_enabled: bool = False
 
     # ── Denoise ───────────────────────────────────────────────────────────────
     denoise_enabled: bool = True
     denoise_strength: float = 0.8
+    # When ``True`` Cosmic Clarity processes only the luminance channel which
+    # preserves chrominance — important for emission-line targets where the
+    # red channel carries the bulk of the Hα signal.
     denoise_luminance_only: bool = False
 
     # ── Sharpen ───────────────────────────────────────────────────────────────
@@ -129,6 +148,7 @@ PRESET_QUICK = ProcessingProfileConfig(
     gradient_removal_enabled=False,
     stretch_method="auto",
     color_calibration_enabled=False,
+    camera_defiltered=True,
     photometric_calibration_enabled=False,
     denoise_enabled=True,
     denoise_strength=0.5,
@@ -146,12 +166,19 @@ PRESET_STANDARD = ProcessingProfileConfig(
     stretch_method="asinh",
     stretch_strength=150.0,
     color_calibration_enabled=True,
+    camera_defiltered=True,
     photometric_calibration_enabled=False,
     denoise_enabled=True,
-    denoise_strength=0.8,
+    # Reduced from 0.8 → 0.55: Cosmic Clarity at strength ≥0.7 erases faint
+    # nebular filaments on emission targets (M42 wings, IFN).
+    denoise_strength=0.55,
+    # Luminance-only denoise preserves chrominance; critical to keep the
+    # red Hα signal which is otherwise smoothed away with full RGB denoise.
+    denoise_luminance_only=True,
     sharpen_enabled=True,
-    sharpen_stellar_amount=0.3,
-    sharpen_nonstellar_amount=0.4,
+    # Reduced from 0.3/0.4 → 0.25/0.30 to avoid amplifying denoised noise floor.
+    sharpen_stellar_amount=0.25,
+    sharpen_nonstellar_amount=0.30,
     super_resolution_enabled=False,
     star_separation_enabled=False,
 )
@@ -165,19 +192,28 @@ PRESET_QUALITY = ProcessingProfileConfig(
     gradient_removal_enabled=True,
     gradient_removal_method="ai",
     stretch_method="asinh",
-    stretch_strength=200.0,
+    # Reduced from 200 → 180: combined with the lower display highlight
+    # rolloff (display.py) this preserves star cores without losing midtones.
+    stretch_strength=180.0,
     color_calibration_enabled=True,
-    # OFF by default even on QUALITY: PCC tends to neutralise residual Hα on
-    # stock DSLR.  Users with defiltered/OSC astro cameras can opt-in per profile.
+    camera_defiltered=True,
+    # PCC kept opt-in even on QUALITY: requires plate-solve + catalogue
+    # lookup, which fail silently on small FOV / sparse fields.
     photometric_calibration_enabled=False,
     denoise_enabled=True,
-    denoise_strength=0.9,
+    # Reduced from 0.9 → 0.65 (was destroying faint signal in tests).
+    denoise_strength=0.65,
+    denoise_luminance_only=True,
     sharpen_enabled=True,
-    sharpen_stellar_amount=0.6,
-    sharpen_nonstellar_amount=0.8,
+    # Reduced from 0.6/0.8 → 0.45/0.55.
+    sharpen_stellar_amount=0.45,
+    sharpen_nonstellar_amount=0.55,
     sharpen_radius=2,
-    super_resolution_enabled=True,
-    star_separation_enabled=True,
+    # Super-resolution and star separation are now opt-in even on QUALITY:
+    # both are heavy AI passes that can introduce artefacts and double the
+    # pipeline runtime; they are toggled per-profile when really needed.
+    super_resolution_enabled=False,
+    star_separation_enabled=False,
     star_separation_recombine=True,
 )
 

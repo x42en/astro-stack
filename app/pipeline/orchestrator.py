@@ -49,7 +49,12 @@ from app.pipeline.retry import RetryPolicy
 logger = get_logger(__name__)
 
 
-def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
+def _fits_to_preview_jpeg(
+    fits_path: "Path",
+    output_path: "Path",
+    *,
+    camera_defiltered: bool = True,
+) -> None:
     """Render a processed FITS image to a JPEG preview (sync, run in thread).
 
     Delegates to the shared display stretch in
@@ -59,6 +64,9 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     Args:
         fits_path: Source FITS file produced by a pipeline step.
         output_path: Destination JPEG path (parent directory is created if needed).
+        camera_defiltered: Forwarded to the display stretch; when ``False``
+            (stock DSLR) the per-channel red black-point is softened to
+            preserve the residual Hα signal.
     """
     import io as _io  # noqa: PLC0415
     from pathlib import Path as _Path  # noqa: PLC0415
@@ -74,7 +82,7 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        data = load_fits_display_rgb(fits_path)
+        data = load_fits_display_rgb(fits_path, camera_defiltered=camera_defiltered)
     except ValueError:
         logger.warning("fits_preview_no_data", path=str(fits_path))
         return
@@ -199,7 +207,12 @@ class PipelineOrchestrator:
 
         preview_path = self._file_store.step_preview_path(self.session_id, step_name)
         try:
-            await asyncio.to_thread(_fits_to_preview_jpeg, fits_path, preview_path)
+            await asyncio.to_thread(
+                _fits_to_preview_jpeg,
+                fits_path,
+                preview_path,
+                camera_defiltered=bool(self.profile_config.camera_defiltered),
+            )
             logger.info(
                 "step_preview_generated",
                 step=step_name,

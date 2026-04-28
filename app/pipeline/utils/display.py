@@ -51,6 +51,7 @@ def load_fits_display_rgb(
     high_pct: float = _DEFAULT_HIGH_PCT,
     asinh_strength: float = _DEFAULT_ASINH_STRENGTH,
     per_channel: bool = True,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Load a FITS image and return a display-ready float array in ``[0, 1]``.
 
@@ -67,6 +68,11 @@ def load_fits_display_rgb(
         per_channel: When ``True`` and the image is RGB, compute the
             percentile clip independently per channel. This neutralises
             colour casts from an uncalibrated sky background.
+        camera_defiltered: ``True`` (default, modern astrophoto norm) keeps
+            the standard split BP/WP policy.  ``False`` (stock DSLR with
+            full IR-cut filter) softens the per-channel **red** black-point
+            so the faint residual Hα signal is not crushed when neutralising
+            the sky background.
 
     Returns:
         ``float32`` ndarray in ``[0, 1]``, RGB order if 3-channel.
@@ -107,6 +113,7 @@ def load_fits_display_rgb(
         high_pct=high_pct,
         asinh_strength=asinh_strength,
         per_channel=per_channel,
+        camera_defiltered=camera_defiltered,
     )
 
 
@@ -117,6 +124,7 @@ def _stretch_array(
     high_pct: float,
     asinh_strength: float,
     per_channel: bool,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Apply a percentile clip + optional asinh midtone stretch.
 
@@ -127,6 +135,10 @@ def _stretch_array(
     (black point) is computed **per channel** but the high percentile
     (white point) is computed **globally** across all channels so the natural
     colour balance of the signal is preserved.
+
+    When ``camera_defiltered=False`` the per-channel red black-point is
+    further attenuated (multiplied by 0.55) so the faint residual Hα of a
+    stock DSLR survives the sky-background subtraction.
     """
     arr = np.ascontiguousarray(arr, dtype=np.float32)
 
@@ -136,6 +148,11 @@ def _stretch_array(
             [np.percentile(arr[..., c], low_pct) for c in range(3)],
             dtype=np.float32,
         )
+        # Stock DSLR: the IR-cut filter slashes the red signal; the per-channel
+        # red BP would then subtract most of what the sensor still captured of
+        # Hα.  Soften it (factor 0.55) to keep the warm tone of emission targets.
+        if not camera_defiltered:
+            lo[0] = lo[0] * 0.55
         # Global white point — preserves emission-line channel dominance
         # (e.g. Hα-rich M42 stays red; Oxygen-III-rich M27 stays teal).
         hi = float(np.percentile(arr, high_pct))
@@ -193,7 +210,8 @@ def apply_hdr_polish(
     *,
     saturation: float = 1.18,
     midtone_contrast: float = 0.18,
-    highlight_rolloff: float = 0.92,
+    highlight_rolloff: float = 0.85,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Apply a gentle HDR-style polish to a normalised ``[0, 1]`` RGB array.
 
@@ -214,7 +232,12 @@ def apply_hdr_polish(
         saturation: Multiplicative gain on HSV S channel (≥ 0).
         midtone_contrast: Strength of the midtone S-curve (0 disables).
         highlight_rolloff: Threshold above which highlights are softly
-            compressed (set to 1.0 to disable).
+            compressed (set to 1.0 to disable).  Default 0.85 keeps bright
+            star cores from clipping to pure white — a generic,
+            object-agnostic recovery of any over-exposed region.
+        camera_defiltered: When ``False`` (stock DSLR) apply a small extra
+            saturation gain (+0.10) and a +5% red-channel boost to compensate
+            for the IR-cut filter attenuation on Hα.
 
     Returns:
         New array with the same shape and dtype as ``arr``, polished and
@@ -235,9 +258,19 @@ def apply_hdr_polish(
         compressed = np.tanh(excess / (1.0 - highlight_rolloff)) * (1.0 - highlight_rolloff)
         out = np.where(out > highlight_rolloff, highlight_rolloff + compressed, out)
 
-    # 3) Saturation boost in HSV — only meaningful for RGB inputs.
-    if out.ndim == 3 and out.shape[2] == 3 and saturation != 1.0:
-        out = _boost_saturation_rgb(out, saturation)
+    # 3) Stock-DSLR red compensation — small +5% gain on the R channel before
+    #    the saturation pass so the residual Hα signal regains visibility on
+    #    emission targets.  Object-agnostic: also slightly warms star cores,
+    #    which is acceptable for an IR-cut sensor that under-records red.
+    effective_saturation = saturation
+    if not camera_defiltered:
+        if out.ndim == 3 and out.shape[2] == 3:
+            out[..., 0] = np.clip(out[..., 0] * 1.05, 0.0, 1.0)
+        effective_saturation = saturation + 0.10
+
+    # 4) Saturation boost in HSV — only meaningful for RGB inputs.
+    if out.ndim == 3 and out.shape[2] == 3 and effective_saturation != 1.0:
+        out = _boost_saturation_rgb(out, effective_saturation)
 
     return np.clip(out, 0.0, 1.0).astype(np.float32, copy=False)
 
@@ -323,6 +356,10 @@ def summarize_profile_config(config: dict | None) -> list[tuple[str, str]]:
         pairs.append(("Color cal.", _on_off(True)))
     if config.get("photometric_calibration_enabled"):
         pairs.append(("PCC", _on_off(True)))
+    # camera_defiltered is "True" by default; only mention when False so the
+    # badge stays terse for the common case.
+    if config.get("camera_defiltered") is False:
+        pairs.append(("Camera", "stock DSLR"))
 
     if config.get("denoise_enabled"):
         pairs.append(("Denoise", f"{config.get('denoise_strength', 0):.2f}"))

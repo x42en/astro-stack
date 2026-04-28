@@ -218,12 +218,13 @@ def _export_raster(
         to_uint16,
     )
 
-    arr_norm = load_fits_display_rgb(fits_path)
+    camera_defiltered = bool((profile_config or {}).get("camera_defiltered", True))
+    arr_norm = load_fits_display_rgb(fits_path, camera_defiltered=camera_defiltered)
 
     # Apply a gentle HDR-style polish (midtone S-curve + highlight rolloff +
     # mild saturation boost) on the deliverable rasters. The pristine FITS
     # archive copy is left untouched for scientific reuse.
-    arr_polished = apply_hdr_polish(arr_norm)
+    arr_polished = apply_hdr_polish(arr_norm, camera_defiltered=camera_defiltered)
 
     # Build provenance strings shared by TIFF tags + JPEG badge.
     summary_pairs = summarize_profile_config(profile_config or {})

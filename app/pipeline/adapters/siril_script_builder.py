@@ -98,6 +98,11 @@ class SirilScriptBuilder:
         # rmgreen must run on linear (un-stretched) data to correctly remove
         # the double-green artefact introduced by Bayer CFA debayering.
         # Applying it after a non-linear stretch degrades colour accuracy.
+        # NOTE: rmgreen is applied regardless of ``camera_defiltered``: the
+        # green excess is a CFA debayer artefact, not a sensor-spectrum
+        # artefact.  The defiltered/stock-DSLR distinction is handled
+        # downstream by the display pipeline (per-channel red BP softening
+        # and red/saturation boost), not by Siril.
         if self.config.color_calibration_enabled:
             commands.append("rmgreen")
         commands.extend(self._stretch_commands())
