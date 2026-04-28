@@ -91,6 +91,22 @@ class ProcessingProfileConfig(SQLModel):
     gradient_removal_enabled: bool = True
     gradient_removal_method: str = "ai"  # ai|polynomial
     gradient_removal_ai_model: str = "1.0.1"
+    # GraXpert ``-correction`` flag.  ``"Subtraction"`` (default) removes the
+    # absolute background level and is appropriate for high-SNR data where
+    # the per-channel sky background is well measured.  ``"Division"``
+    # preserves the per-channel **ratios** of signal to background, which
+    # protects faint chromatic signal (e.g. residual Hα on a stock DSLR) from
+    # being clipped to zero when the red sky background dominates the
+    # recorded red signal.  Only honoured when ``gradient_removal_method`` is
+    # ``"ai"`` (polynomial mode is always Subtraction).
+    gradient_removal_correction: str = "Subtraction"  # Subtraction|Division
+    # GraXpert ``-smoothing`` flag, ``[0.0, 1.0]``.  Controls how smoothly the
+    # background model interpolates between sample tiles: ``1.0`` (GraXpert
+    # default) builds a very smooth large-scale model that may absorb diffuse
+    # nebulosity as if it were gradient; lower values (~0.3) produce a more
+    # locally-detailed model that follows sky variations without flattening
+    # extended emission targets.  Reduce on rich nebula fields with stock DSLR.
+    gradient_removal_smoothing: float = 1.0
 
     # ── Stretch & colour ─────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear

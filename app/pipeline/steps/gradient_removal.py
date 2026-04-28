@@ -94,6 +94,8 @@ class GradientRemovalStep(PipelineStep):
             output_path=output_path,
             method=method,
             ai_model=ai_model,
+            correction=str(config.get("gradient_removal_correction", "Subtraction")),
+            smoothing=float(config.get("gradient_removal_smoothing", 1.0)),
         )
 
         context.background_removed_path = output_path

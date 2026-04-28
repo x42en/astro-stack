@@ -63,6 +63,9 @@ class GraXpertAdapter:
         method: str = "ai",
         ai_model: str = "1.0.1",
         timeout: float = 600.0,
+        *,
+        correction: str = "Subtraction",
+        smoothing: float = 1.0,
     ) -> None:
         """Remove the sky gradient and background from a FITS image.
 
@@ -74,15 +77,41 @@ class GraXpertAdapter:
                 ``^\\d+\\.\\d+\\.\\d+$``, e.g. ``"1.0.1"``). For backward
                 compatibility, a leading ``"GraXpert-AI-"`` prefix is stripped.
             timeout: Maximum execution time in seconds.
+            correction: GraXpert ``-correction`` flag value, ``"Subtraction"``
+                (default) or ``"Division"``.  Division preserves per-channel
+                signal/background ratios and protects faint chromatic signal.
+                Invalid values fall back to ``"Subtraction"`` with a warning.
+            smoothing: GraXpert ``-smoothing`` flag, ``[0.0, 1.0]``.  Lower
+                values make the background model more locally detailed (less
+                likely to absorb diffuse nebulosity).  Out-of-range values
+                are clamped with a warning.
 
         Raises:
             PipelineStepException: If GraXpert cannot be found or fails.
         """
         ai_version = _normalize_ai_version(ai_model)
 
+        # ``correction`` is a string the GraXpert CLI matches case-sensitively;
+        # an unknown value would crash the run, so coerce to the default with
+        # a warning rather than propagating a malformed profile to subprocess.
+        correction_value = correction if correction in ("Subtraction", "Division") else "Subtraction"
+        if correction_value != correction:
+            logger.warning(
+                "graxpert_invalid_correction",
+                requested=correction,
+                fallback=correction_value,
+            )
+        clamped_smoothing = _clamp(float(smoothing), 0.0, 1.0, name="smoothing")
+
         extra_flags: list[str] = []
         if method == "ai":
             extra_flags = ["-ai_version", ai_version]
+        # ``-correction`` and ``-smoothing`` are valid for both AI and polynomial
+        # background-extraction modes; pass them unconditionally.
+        extra_flags += [
+            "-correction", correction_value,
+            "-smoothing", f"{clamped_smoothing:.3f}",
+        ]
 
         output_stem = f"{input_path.stem}_GraXpertBGE"
         cmd = self._build_cmd(
@@ -101,7 +130,12 @@ class GraXpertAdapter:
             error_code=ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
             step_name="gradient_removal",
             log_event="graxpert_bge",
-            log_extra={"method": method, "ai_version": ai_version},
+            log_extra={
+                "method": method,
+                "ai_version": ai_version,
+                "correction": correction_value,
+                "smoothing": clamped_smoothing,
+            },
         )
 
     async def denoise(
