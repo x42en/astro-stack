@@ -307,25 +307,30 @@ class AstapAdapter:
             "PLTSOLVD", "OBJCTRA", "OBJCTDEC", "RA", "DEC",
         }
 
+        # ASTAP writes the sidecar as concatenated 80-char FITS cards on a
+        # single line (no newlines). ``Header.fromstring`` parses exactly
+        # that fixed-width layout. Pad to a multiple of 80 to be safe.
+        raw_text = wcs_path.read_text(errors="replace").replace("\n", "").replace("\r", "")
+        if len(raw_text) % 80:
+            raw_text = raw_text.ljust(((len(raw_text) // 80) + 1) * 80)
+        try:
+            sidecar_hdr = fits.Header.fromstring(raw_text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "astap_wcs_sidecar_parse_failed",
+                sidecar=str(wcs_path),
+                error=str(exc),
+            )
+            return
+
         merged: list[tuple[str, Any, str]] = []
-        for raw in wcs_path.read_text(errors="replace").splitlines():
-            line = raw.rstrip()
-            if not line or line.startswith(("END", "COMMENT", "HISTORY", "CONTINUE")):
-                continue
-            # FITS card layout: 8-char keyword, "= ", value [/ comment]
-            if "=" not in line:
-                continue
-            key = line[:8].strip().upper()
-            if not key:
+        for card in sidecar_hdr.cards:
+            key = (card.keyword or "").upper()
+            if not key or key in {"END", "COMMENT", "HISTORY", "CONTINUE", ""}:
                 continue
             if key not in wcs_keys and not key.startswith(wcs_prefixes):
                 continue
-            try:
-                card = fits.Card.fromstring(line.ljust(80))
-                if card.keyword:
-                    merged.append((card.keyword, card.value, card.comment))
-            except Exception:  # noqa: BLE001
-                continue
+            merged.append((card.keyword, card.value, card.comment))
 
         if not merged:
             logger.warning(
