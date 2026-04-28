@@ -107,7 +107,11 @@ class Settings(BaseSettings):
 
     # ── Planning & weather (open-meteo + skyfield) ───────────────────────────
     openmeteo_forecast_url: str = "https://api.open-meteo.com/v1/forecast"
-    openmeteo_geocode_url: str = "https://geocoding-api.open-meteo.com/v1/reverse"
+    # NOTE: Open-Meteo only exposes *forward* geocoding (`/v1/search`); there
+    # is no reverse endpoint. The setting is kept for forward-search use; the
+    # reverse path is served by Nominatim (see `nominatim_reverse_url`).
+    openmeteo_geocode_url: str = "https://geocoding-api.open-meteo.com/v1/search"
+    nominatim_reverse_url: str = "https://nominatim.openstreetmap.org/reverse"
     weather_cache_ttl_s: int = Field(default=3600, ge=60)
     geocode_cache_ttl_s: int = Field(default=86400, ge=60)
     # Skyfield ephemeris file (DE421, ~17 MB, bundled in image).

@@ -45,14 +45,34 @@ def _load_skyfield_modules() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def _load_ephemeris(path: str) -> Any:
-    """Load and cache the DE421 ephemeris file from ``path``."""
+    """Load and cache the DE421 ephemeris file from ``path``.
+
+    The file is validated up front: a missing or zero-byte file (the typical
+    symptom of a failed Docker build-time download) raises a clear
+    :class:`ExternalServiceException` instead of letting :mod:`jplephem`
+    crash later with the cryptic ``file starts with b''`` error.
+    """
     if not os.path.exists(path):
         raise ExternalServiceException(
             f"Skyfield ephemeris missing at {path}",
             details={"path": path},
         )
+    size = os.path.getsize(path)
+    if size < 1024:  # DE421 is ~17 MB; anything tiny is a broken download.
+        raise ExternalServiceException(
+            f"Skyfield ephemeris at {path} appears corrupt ({size} bytes). "
+            "Re-download with: wget https://naif.jpl.nasa.gov/pub/naif/"
+            "generic_kernels/spk/planets/de421.bsp -O " + path,
+            details={"path": path, "size_bytes": size},
+        )
     sf = _load_skyfield_modules()
-    return sf["load_file"](path)
+    try:
+        return sf["load_file"](path)
+    except (ValueError, OSError) as exc:
+        raise ExternalServiceException(
+            f"Failed to parse Skyfield ephemeris at {path}: {exc}",
+            details={"path": path, "size_bytes": size},
+        ) from exc
 
 
 # ── Pure helpers (no skyfield needed) ─────────────────────────────────────────

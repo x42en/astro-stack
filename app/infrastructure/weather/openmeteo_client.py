@@ -98,6 +98,18 @@ def _parse_dt_required(raw: str) -> datetime:
     return datetime.fromisoformat(raw)
 
 
+def _synthetic_location(latitude: float, longitude: float) -> "GeoLocation":
+    """Return a placeholder :class:`GeoLocation` when geocoding fails."""
+    return GeoLocation(
+        name=f"{latitude:.4f}, {longitude:.4f}",
+        country=None,
+        timezone="UTC",
+        elevation_m=0.0,
+        latitude=latitude,
+        longitude=longitude,
+    )
+
+
 # ── Client ────────────────────────────────────────────────────────────────────
 
 
@@ -144,11 +156,15 @@ class OpenMeteoClient:
         """Fetch hourly + daily forecast for ``days`` (clamped to 1..16)."""
         _validate_coords(latitude, longitude)
         days = max(1, min(16, days))
+        # NOTE: ``visibility`` is only available for the next ~7 days on
+        # Open-Meteo's free tier and triggers an HTTP 400 when combined with
+        # ``forecast_days=16``. We omit it here and default the field to 0
+        # in :func:`_parse_forecast`; downstream callers do not display it.
         params: dict[str, Any] = {
             "latitude": latitude,
             "longitude": longitude,
             "hourly": (
-                "cloud_cover,cloud_cover_low,visibility,"
+                "cloud_cover,cloud_cover_low,"
                 "relative_humidity_2m,dew_point_2m,wind_speed_10m"
             ),
             "daily": "sunrise,sunset,moonrise,moonset,moon_phase",
@@ -161,35 +177,61 @@ class OpenMeteoClient:
     async def reverse_geocode(self, latitude: float, longitude: float) -> GeoLocation:
         """Return the nearest named place for ``(latitude, longitude)``.
 
-        When Open-Meteo returns no result, a synthetic :class:`GeoLocation`
-        is returned with the raw coordinates as the display name.
+        Open-Meteo only exposes *forward* geocoding (``/v1/search``); it has
+        no reverse-geocoding endpoint. We use OpenStreetMap Nominatim instead
+        — its public instance is free and well-suited to low-volume traffic
+        provided each request carries a descriptive ``User-Agent``.
+
+        On any failure we fall back to a synthetic :class:`GeoLocation` so
+        the planning UI keeps working — only the human-readable name is lost.
         """
         _validate_coords(latitude, longitude)
         params: dict[str, Any] = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "language": "en",
-            "count": 1,
+            "lat": latitude,
+            "lon": longitude,
+            "format": "jsonv2",
+            "zoom": 10,
+            "addressdetails": 1,
+            "accept-language": "en",
         }
-        payload = await self._get_json(get_settings().openmeteo_geocode_url, params)
-        results = payload.get("results") or []
-        if not results:
-            return GeoLocation(
-                name=f"{latitude:.4f}, {longitude:.4f}",
-                country=None,
-                timezone="UTC",
-                elevation_m=0.0,
-                latitude=latitude,
-                longitude=longitude,
+        try:
+            response = await self._http.get(
+                get_settings().nominatim_reverse_url,
+                params=params,
+                headers={
+                    "User-Agent": (
+                        f"AstroStack/{get_settings().app_version} "
+                        "(+https://github.com/circle-cyber/astro-stack)"
+                    ),
+                    "Accept": "application/json",
+                },
             )
-        first = results[0]
+            response.raise_for_status()
+            payload: dict[str, Any] = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("nominatim reverse-geocode failed: %s", exc)
+            return _synthetic_location(latitude, longitude)
+
+        address = payload.get("address") or {}
+        name = (
+            address.get("city")
+            or address.get("town")
+            or address.get("village")
+            or address.get("hamlet")
+            or address.get("municipality")
+            or address.get("county")
+            or payload.get("name")
+            or payload.get("display_name")
+            or f"{latitude:.4f}, {longitude:.4f}"
+        )
+        country = address.get("country")
         return GeoLocation(
-            name=str(first.get("name") or f"{latitude:.4f}, {longitude:.4f}"),
-            country=first.get("country"),
-            timezone=str(first.get("timezone") or "UTC"),
-            elevation_m=float(first.get("elevation") or 0.0),
-            latitude=float(first.get("latitude") or latitude),
-            longitude=float(first.get("longitude") or longitude),
+            name=str(name),
+            country=str(country) if country else None,
+            timezone="UTC",  # Nominatim does not return tz; client may upgrade.
+            elevation_m=0.0,
+            latitude=latitude,
+            longitude=longitude,
         )
 
 

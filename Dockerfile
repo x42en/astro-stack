@@ -202,11 +202,21 @@ RUN useradd -m -s /bin/bash astro \
 
 # Skyfield ephemeris (DE421, ~17 MB) — bundled to keep planning offline.
 # Network failure is non-fatal at build time; planner_service will warn at boot.
-RUN wget -q --tries=3 --timeout=120 \
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de421.bsp" \
-        -O /opt/ephemerides/de421.bsp \
-    && chown astro:astro /opt/ephemerides/de421.bsp \
-    || echo "WARNING: DE421 ephemeris download failed — planner will be disabled until file is provided"
+# A zero-byte file is *worse* than a missing one (jplephem crashes with a
+# cryptic error), so we explicitly delete the artefact when the download
+# fails or produces an empty file.
+RUN set -eu; \
+    if wget -q --tries=3 --timeout=120 \
+            "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de421.bsp" \
+            -O /opt/ephemerides/de421.bsp \
+        && [ -s /opt/ephemerides/de421.bsp ] \
+        && [ "$(stat -c %s /opt/ephemerides/de421.bsp)" -gt 1024 ]; then \
+        chown astro:astro /opt/ephemerides/de421.bsp; \
+        echo "DE421 ephemeris downloaded ($(stat -c %s /opt/ephemerides/de421.bsp) bytes)"; \
+    else \
+        rm -f /opt/ephemerides/de421.bsp; \
+        echo "WARNING: DE421 ephemeris download failed — planner will be disabled until file is provided"; \
+    fi
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH" \

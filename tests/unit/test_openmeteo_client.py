@@ -17,8 +17,10 @@ from app.infrastructure.weather.openmeteo_client import (
 
 
 class _FakeSettings:
+    app_version = "0.1.0"
     openmeteo_forecast_url = "https://api.open-meteo.test/forecast"
-    openmeteo_geocode_url = "https://geocode.open-meteo.test/reverse"
+    openmeteo_geocode_url = "https://geocode.open-meteo.test/search"
+    nominatim_reverse_url = "https://nominatim.test/reverse"
 
 
 @pytest.fixture(autouse=True)
@@ -115,20 +117,20 @@ class TestForecast:
 class TestReverseGeocode:
     @pytest.mark.asyncio
     async def test_returns_first_result(self) -> None:
+        # Nominatim payload shape (jsonv2 with addressdetails=1).
         payload = {
-            "results": [
-                {
-                    "name": "Paris",
-                    "country": "France",
-                    "timezone": "Europe/Paris",
-                    "elevation": 35.0,
-                    "latitude": 48.8566,
-                    "longitude": 2.3522,
-                }
-            ]
+            "display_name": "Paris, Île-de-France, France",
+            "address": {
+                "city": "Paris",
+                "country": "France",
+            },
+            "lat": "48.8566",
+            "lon": "2.3522",
         }
 
-        def handler(_: httpx.Request) -> httpx.Response:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert "nominatim" in str(request.url)
+            assert request.headers.get("user-agent", "").startswith("AstroStack/")
             return httpx.Response(200, json=payload)
 
         transport = httpx.MockTransport(handler)
@@ -138,18 +140,19 @@ class TestReverseGeocode:
 
         assert location.name == "Paris"
         assert location.country == "France"
-        assert location.timezone == "Europe/Paris"
+        # Nominatim does not return a timezone; the synthetic value is "UTC".
+        assert location.timezone == "UTC"
 
     @pytest.mark.asyncio
-    async def test_synthesises_when_no_results(self) -> None:
+    async def test_falls_back_when_nominatim_errors(self) -> None:
         def handler(_: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"results": []})
+            return httpx.Response(503, text="boom")
 
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as http:
             client = OpenMeteoClient(http_client=http)
             location = await client.reverse_geocode(0.0, 0.0)
 
+        # Synthetic placeholder so the planning UI keeps working.
         assert location.timezone == "UTC"
-        # Sanity: the synthetic name must encode the coordinates.
         assert "0.0000" in location.name
