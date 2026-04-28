@@ -15,13 +15,31 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import get_settings
 from app.core.errors import ErrorCode, ExternalServiceException, ValidationException
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _ensure_utc(value: datetime | str | None) -> datetime | None:
+    """Coerce a datetime (or ISO string) into a tz-aware UTC datetime.
+
+    Pydantic re-validation of *cached* JSON payloads can re-introduce naive
+    datetimes when the cached string lacks an offset (i.e. payloads created
+    before the timezone-normalisation fix). Forcing UTC here makes the
+    forecast model safe to compare against the planner's tz-aware windows
+    regardless of the payload origin.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 # ── DTOs ──────────────────────────────────────────────────────────────────────
@@ -49,6 +67,11 @@ class HourlyWeather(BaseModel):
     dew_point_c: float
     wind_speed_kmh: float
 
+    @field_validator("time", mode="before")
+    @classmethod
+    def _normalise_time(cls, v: Any) -> Any:
+        return _ensure_utc(v) if v is not None else v
+
 
 class DailyWeather(BaseModel):
     """Per-day astronomical events from Open-Meteo."""
@@ -59,6 +82,11 @@ class DailyWeather(BaseModel):
     moonrise: Optional[datetime] = None
     moonset: Optional[datetime] = None
     moon_phase: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("sunrise", "sunset", "moonrise", "moonset", mode="before")
+    @classmethod
+    def _normalise_dt(cls, v: Any) -> Any:
+        return _ensure_utc(v) if v is not None else v
 
 
 class WeatherForecast(BaseModel):
