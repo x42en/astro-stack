@@ -1,12 +1,13 @@
-"""GraXpert adapter for AI-based gradient and background extraction.
+"""GraXpert adapter for AI-based gradient extraction and denoising.
 
-Wraps GraXpert CLI (github.com/Steffenhir/GraXpert) as an async subprocess.
-GraXpert uses a U-Net model to extract and subtract sky-background gradients
-from astrophotography images.
+Wraps the GraXpert CLI (github.com/Steffenhir/GraXpert) as an async subprocess.
+GraXpert uses U-Net models for background extraction and (since 3.x) for
+denoising astrophotography images.
 
 Example:
     >>> adapter = GraXpertAdapter()
     >>> await adapter.remove_background(input_path, output_path)
+    >>> await adapter.denoise(input_path, output_path, strength=0.5)
 """
 
 from __future__ import annotations
@@ -25,10 +26,10 @@ logger = get_logger(__name__)
 
 
 class GraXpertAdapter:
-    """Adapter for the GraXpert background gradient removal tool.
+    """Adapter for the GraXpert background-extraction & denoise tool.
 
-    Supports both AI model-based extraction and polynomial background
-    fitting, depending on the profile configuration.
+    Supports AI U-Net background extraction, polynomial fitting, and the new
+    AI denoising mode (``-cmd denoising``) introduced in GraXpert 3.x.
 
     Attributes:
         source_path: Directory containing the GraXpert installation.
@@ -49,10 +50,10 @@ class GraXpertAdapter:
             models_path: Optional models directory; defaults to settings.
             gpu_device: CUDA device string.
         """
-        settings = get_settings()
-        self.source_path = Path(source_path or settings.graxpert_source_path)
+        settings = get_settings() if (source_path is None or models_path is None) else None
+        self.source_path = Path(source_path or settings.graxpert_source_path)  # type: ignore[union-attr]
         # GraXpert 3.x stores models under XDG_DATA_HOME/GraXpert/ (capital G+X)
-        self.models_path = Path(models_path or settings.models_path) / "GraXpert"
+        self.models_path = Path(models_path or settings.models_path) / "GraXpert"  # type: ignore[union-attr]
         self.gpu_device = gpu_device
 
     async def remove_background(
@@ -60,63 +61,210 @@ class GraXpertAdapter:
         input_path: Path,
         output_path: Path,
         method: str = "ai",
-        ai_model: str = "1.0.0",
+        ai_model: str = "1.0.1",
         timeout: float = 600.0,
     ) -> None:
         """Remove the sky gradient and background from a FITS image.
 
         Args:
             input_path: Path to the stacked FITS file.
-            output_path: Desired output FITS path for the background-corrected image.
+            output_path: Desired output FITS path for the corrected image.
             method: Extraction method: ``"ai"`` (U-Net) or ``"polynomial"``.
             ai_model: GraXpert AI model **version** (must match
-                ``^\d+\.\d+\.\d+$``, e.g. ``"1.0.0"``). For backward
+                ``^\\d+\\.\\d+\\.\\d+$``, e.g. ``"1.0.1"``). For backward
                 compatibility, a leading ``"GraXpert-AI-"`` prefix is stripped.
             timeout: Maximum execution time in seconds.
 
         Raises:
             PipelineStepException: If GraXpert cannot be found or fails.
         """
-        # GraXpert validates -ai_version against ^\d+\.\d+\.\d+$ and rejects
-        # anything else with argparse exit 2.  Strip the legacy prefix if a
-        # stored profile still uses the old "GraXpert-AI-1.0.0" form.
         ai_version = _normalize_ai_version(ai_model)
 
-        # GraXpert's -output flag is a *basename without extension* — it always
-        # writes the result next to the input as ``<input_dir>/<output>.fits``.
-        # We pass a unique stem and move the produced file to the requested
-        # output_path after the run.
+        extra_flags: list[str] = []
+        if method == "ai":
+            extra_flags = ["-ai_version", ai_version]
+
         output_stem = f"{input_path.stem}_GraXpertBGE"
-        # GraXpert writes ``<output_stem>.<ext>`` next to the input. The
-        # extension is derived from GraXpert's own format detection (``.fits``
-        # or ``.xisf``) and does NOT necessarily match the input suffix — a
-        # ``.fit`` input typically yields a ``.fits`` output. We glob for the
-        # produced file *after* the run rather than guessing its name here.
+        cmd = self._build_cmd(
+            cmd_name="background-extraction",
+            input_path=input_path,
+            output_stem=output_stem,
+            extra_flags=extra_flags,
+        )
 
-        # Snapshot existing siblings so we can detect what GraXpert created.
-        pre_existing = {
-            p for p in input_path.parent.glob(f"{output_stem}.*")
-        }
+        await self._run_command(
+            cmd=cmd,
+            input_path=input_path,
+            output_stem=output_stem,
+            output_path=output_path,
+            timeout=timeout,
+            error_code=ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
+            step_name="gradient_removal",
+            log_event="graxpert_bge",
+            log_extra={"method": method, "ai_version": ai_version},
+        )
 
-        # GraXpert can be invoked as a Python module or as an installed CLI entry-point
+    async def denoise(
+        self,
+        input_path: Path,
+        output_path: Path,
+        *,
+        ai_model: str = "3.0.2",
+        strength: float = 0.5,
+        batch_size: int = 4,
+        timeout: float = 900.0,
+    ) -> None:
+        """Denoise a FITS image with GraXpert's AI denoise model.
+
+        Wraps ``graxpert -cli -cmd denoising``. Strength and batch_size are
+        clamped to the CLI-accepted ranges with a warning log on truncation
+        so a malformed profile cannot abort the run.
+
+        Args:
+            input_path: Path to the input FITS file.
+            output_path: Desired output FITS path.
+            ai_model: GraXpert denoise model version (semver; e.g. ``"3.0.2"``).
+                Prefixed legacy values are tolerated via :func:`_normalize_ai_version`.
+            strength: Denoise strength in ``[0.0, 1.0]``. Out-of-range values
+                are clamped (warning logged).
+            batch_size: Number of tiles processed in parallel ``[1, 32]``.
+                Higher values are faster but may cause GPU OOM. Clamped if
+                outside the range.
+            timeout: Maximum execution time in seconds (denoise is heavier
+                than BGE so the default is larger).
+
+        Raises:
+            PipelineStepException: If GraXpert cannot be found, times out, or fails.
+        """
+        ai_version = _normalize_ai_version(ai_model)
+        clamped_strength = _clamp(float(strength), 0.0, 1.0, name="strength")
+        clamped_batch = int(_clamp(int(batch_size), 1, 32, name="batch_size"))
+
+        extra_flags = [
+            "-ai_version", ai_version,
+            "-strength", f"{clamped_strength:.3f}",
+            "-batch_size", str(clamped_batch),
+        ]
+
+        output_stem = f"{input_path.stem}_GraXpertDenoise"
+        cmd = self._build_cmd(
+            cmd_name="denoising",
+            input_path=input_path,
+            output_stem=output_stem,
+            extra_flags=extra_flags,
+        )
+
+        await self._run_command(
+            cmd=cmd,
+            input_path=input_path,
+            output_stem=output_stem,
+            output_path=output_path,
+            timeout=timeout,
+            error_code=ErrorCode.PIPE_GRAXPERT_DENOISE_FAILED,
+            step_name="denoise",
+            log_event="graxpert_denoise",
+            log_extra={
+                "ai_version": ai_version,
+                "strength": clamped_strength,
+                "batch_size": clamped_batch,
+            },
+        )
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _gpu_flag(self) -> str:
+        """Return ``'true'`` when a CUDA device is configured, ``'false'`` otherwise.
+
+        GraXpert's ``-gpu`` flag accepts the string literals ``true`` / ``false``
+        (not a device index). We enable GPU whenever ``gpu_device`` starts with
+        ``'cuda'``; the runtime will use the first visible CUDA device as
+        determined by ``CUDA_VISIBLE_DEVICES`` or driver defaults.
+        """
+        return "true" if self.gpu_device.startswith("cuda") else "false"
+
+    def _build_cmd(
+        self,
+        *,
+        cmd_name: str,
+        input_path: Path,
+        output_stem: str,
+        extra_flags: list[str],
+    ) -> list[str]:
+        """Build a GraXpert CLI invocation.
+
+        Selects between the installed ``graxpert`` entry-point and the
+        ``GraXpert.py`` source script depending on what's available on disk.
+        Both forms share the same flag layout.
+
+        Args:
+            cmd_name: ``-cmd`` value (e.g. ``"background-extraction"`` or
+                ``"denoising"``).
+            input_path: Input FITS path (positional argument).
+            output_stem: ``-output`` value (basename without extension; GraXpert
+                appends ``.fits``/``.xisf`` and writes next to the input).
+            extra_flags: Command-specific flags inserted between the common
+                prefix and the input path.
+
+        Returns:
+            Command token list ready to pass to :func:`asyncio.create_subprocess_exec`.
+        """
         graxpert_main = self.source_path / "GraXpert.py"
-        if not graxpert_main.exists():
-            cmd = self._build_command_installed(
-                input_path=input_path,
-                output_stem=output_stem,
-                method=method,
-                ai_version=ai_version,
-            )
+        if graxpert_main.exists():
+            prefix = [sys.executable, str(graxpert_main)]
         else:
-            cmd = self._build_command_script(
-                script=graxpert_main,
-                input_path=input_path,
-                output_stem=output_stem,
-                method=method,
-                ai_version=ai_version,
-            )
+            prefix = ["graxpert"]
+        # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode;
+        # without it the script prints usage help and exits 2.
+        return [
+            *prefix,
+            "-cli",
+            "-cmd", cmd_name,
+            "-output", output_stem,
+            "-gpu", self._gpu_flag(),
+            *extra_flags,
+            str(input_path),
+        ]
 
-        logger.info("graxpert_starting", input=str(input_path), method=method)
+    async def _run_command(
+        self,
+        *,
+        cmd: list[str],
+        input_path: Path,
+        output_stem: str,
+        output_path: Path,
+        timeout: float,
+        error_code: ErrorCode,
+        step_name: str,
+        log_event: str,
+        log_extra: Optional[dict] = None,
+    ) -> None:
+        """Run a GraXpert subprocess and move its produced file to ``output_path``.
+
+        GraXpert's ``-output`` flag is a *basename without extension* — it always
+        writes the result next to the input as
+        ``<input_dir>/<output_stem>.<ext>``. We snapshot the directory before
+        the run, glob for the new file afterwards, and rename it to the
+        requested ``output_path``.
+
+        Args:
+            cmd: Full command list (built by :meth:`_build_cmd`).
+            input_path: Input FITS path (used to locate the produced file).
+            output_stem: ``-output`` basename (used in the post-run glob).
+            output_path: Destination path for the produced file.
+            timeout: Subprocess timeout in seconds.
+            error_code: :class:`ErrorCode` raised on failure.
+            step_name: Pipeline step name for the raised exception.
+            log_event: Structured logger event base name.
+            log_extra: Optional structured log fields.
+        """
+        # Snapshot existing siblings so we can detect what GraXpert created.
+        pre_existing = {p for p in input_path.parent.glob(f"{output_stem}.*")}
+
+        logger.info(
+            f"{log_event}_starting",
+            input=str(input_path),
+            **(log_extra or {}),
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -124,28 +272,30 @@ class GraXpertAdapter:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
         except asyncio.TimeoutError as exc:
             raise PipelineStepException(
-                ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
+                error_code,
                 f"GraXpert timed out after {timeout}s.",
-                step_name="gradient_removal",
+                step_name=step_name,
                 retryable=True,
             ) from exc
         except FileNotFoundError as exc:
             raise PipelineStepException(
                 ErrorCode.SYS_EXTERNAL_TOOL_MISSING,
                 "GraXpert is not installed or not found at the configured path.",
-                step_name="gradient_removal",
+                step_name=step_name,
                 retryable=False,
             ) from exc
 
         if proc.returncode != 0:
             stderr_text = stderr.decode("utf-8", errors="replace")[:500]
             raise PipelineStepException(
-                ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
+                error_code,
                 f"GraXpert failed (exit {proc.returncode}): {stderr_text}",
-                step_name="gradient_removal",
+                step_name=step_name,
                 retryable=True,
                 details={"returncode": proc.returncode, "stderr": stderr_text},
             )
@@ -159,12 +309,12 @@ class GraXpertAdapter:
         )
         if not produced_candidates:
             raise PipelineStepException(
-                ErrorCode.PIPE_GRADIENT_REMOVAL_FAILED,
+                error_code,
                 (
                     f"GraXpert did not produce expected output "
                     f"({output_stem}.fits/.fit/.xisf) in {input_path.parent}"
                 ),
-                step_name="gradient_removal",
+                step_name=step_name,
                 retryable=False,
             )
         produced = produced_candidates[0]
@@ -173,90 +323,7 @@ class GraXpertAdapter:
             output_path.unlink()
         produced.rename(output_path)
 
-        logger.info("graxpert_done", output=str(output_path))
-
-    # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _gpu_flag(self) -> str:
-        """Return ``'true'`` when a CUDA device is configured, ``'false'`` otherwise.
-
-        GraXpert's ``-gpu`` flag accepts the string literals ``true`` / ``false``
-        (not a device index).  We enable GPU whenever ``gpu_device`` starts with
-        ``'cuda'``; the runtime will use the first visible CUDA device as
-        determined by ``CUDA_VISIBLE_DEVICES`` or driver defaults.
-        """
-        return "true" if self.gpu_device.startswith("cuda") else "false"
-
-    def _build_command_script(
-        self,
-        script: Path,
-        input_path: Path,
-        output_stem: str,
-        method: str,
-        ai_version: str,
-    ) -> list[str]:
-        """Build the command to invoke GraXpert as a Python script.
-
-        Args:
-            script: Path to ``GraXpert.py``.
-            input_path: Input FITS path.
-            output_stem: Output basename without extension (GraXpert appends
-                ``.fits``/``.xisf`` and writes next to the input).
-            method: Extraction method (``ai`` or ``polynomial``).
-            ai_version: AI model version string (semver, e.g. ``"1.0.0"``).
-
-        Returns:
-            Command token list.
-        """
-        # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
-        # Without it the script prints usage help and exits 2.
-        # Algorithm selection: polynomial/Splines is the default when -ai_version
-        # is omitted; AI mode requires -ai_version <semver>.
-        cmd = [
-            sys.executable,
-            str(script),
-            "-cli",
-            "-cmd", "background-extraction",
-            "-output", output_stem,
-            "-gpu", self._gpu_flag(),
-        ]
-        if method == "ai":
-            cmd += ["-ai_version", ai_version]
-        return cmd + [str(input_path)]
-
-    def _build_command_installed(
-        self,
-        input_path: Path,
-        output_stem: str,
-        method: str,
-        ai_version: str,
-    ) -> list[str]:
-        """Build the command when GraXpert is installed as a package.
-
-        Args:
-            input_path: Input FITS path.
-            output_stem: Output basename without extension (GraXpert appends
-                the extension and writes next to the input).
-            method: Extraction method.
-            ai_version: AI model version string (semver, e.g. ``"1.0.0"``).
-
-        Returns:
-            Command token list.
-        """
-        # GraXpert 3.x CLI requires -cli before -cmd to enable headless mode.
-        # Without it the entry-point prints usage help and exits 2.
-        # Algorithm selection: polynomial/Splines is the default when -ai_version
-        # is omitted; AI mode requires -ai_version <semver>.
-        cmd = [
-            "graxpert",
-            "-cli",
-            "-cmd", "background-extraction",
-            "-output", output_stem,
-            "-gpu", self._gpu_flag(),
-        ]
-        if method == "ai":
-            cmd += ["-ai_version", ai_version]
-        return cmd + [str(input_path)]
+        logger.info(f"{log_event}_done", output=str(output_path))
 
 
 _AI_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -271,7 +338,7 @@ def _normalize_ai_version(ai_model: str) -> str:
     strip such prefixes for backward compatibility.
 
     Args:
-        ai_model: Value from the profile (e.g. ``"1.0.0"`` or
+        ai_model: Value from the profile (e.g. ``"1.0.1"`` or
             ``"GraXpert-AI-1.0.0"``).
 
     Returns:
@@ -290,7 +357,32 @@ def _normalize_ai_version(ai_model: str) -> str:
         logger.warning(
             "graxpert_ai_version_invalid",
             provided=ai_model,
-            fallback="1.0.0",
+            fallback="1.0.1",
         )
-        return "1.0.0"
+        return "1.0.1"
     return candidate
+
+
+def _clamp(value: float, low: float, high: float, *, name: str) -> float:
+    """Clamp ``value`` into ``[low, high]``, logging a warning on truncation.
+
+    Args:
+        value: Caller-provided value.
+        low: Inclusive lower bound.
+        high: Inclusive upper bound.
+        name: Field name used in the warning log message.
+
+    Returns:
+        The clamped value.
+    """
+    if value < low or value > high:
+        clamped = max(low, min(high, value))
+        logger.warning(
+            "graxpert_param_clamped",
+            field=name,
+            provided=value,
+            clamped=clamped,
+            range=[low, high],
+        )
+        return clamped
+    return value

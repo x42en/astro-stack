@@ -316,6 +316,32 @@ class SirilAdapter:
                                 retryable=False,
                                 details={"command": command, "siril_message": event.message, "siril_log": log_context},
                             )
+                        # Star-registration alignment failure: Siril's two-pass
+                        # registration could not find a reference frame that
+                        # matches more than itself. Retrying with the same FITS
+                        # files cannot succeed — the user must improve the
+                        # input (focus, exposure, framing) or relax findstar
+                        # tuning. Marking non-retryable means the session
+                        # transitions to FAILED in seconds with an actionable
+                        # message instead of looping for ~90 s.
+                        is_alignment_failure = any(
+                            "could not find an image that aligns" in msg.lower()
+                            or "could not align more than half" in msg.lower()
+                            for msg in log_context
+                        )
+                        if is_alignment_failure:
+                            raise PipelineStepException(
+                                ErrorCode.PIPE_REGISTRATION_FAILED,
+                                (
+                                    "Star registration failed: too few matchable "
+                                    "stars across frames. Check focus, exposure, "
+                                    "and tracking quality, or contact support to "
+                                    "tune star detection for this dataset."
+                                ),
+                                step_name=cmd_name,
+                                retryable=False,
+                                details={"command": command, "siril_message": event.message, "siril_log": log_context},
+                            )
                         raise PipelineStepException(
                             ErrorCode.PIPE_SIRIL_COMMAND_ERROR,
                             f"Siril command '{command}' failed: {event.message}",

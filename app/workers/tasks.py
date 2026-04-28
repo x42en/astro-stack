@@ -104,6 +104,19 @@ async def run_pipeline(
             # rather than staying in Processing indefinitely. job_try is 1-based.
             _MAX_ARQ_TRIES = 3
             if exc.retryable and ctx.get("job_try", 1) < _MAX_ARQ_TRIES:
+                # Notify the UI that the session is still alive but is about
+                # to retry — without this the front-end shows "Processing"
+                # silently for the entire 30 s defer, which looks like a hang.
+                # ``job_status="retrying"`` lets the UI render an explicit
+                # retry indicator while keeping ``new_status="processing"``
+                # so the session doesn't move out of the active list.
+                retrying_event = SessionStatusEvent(
+                    session_id=session_id,
+                    new_status="processing",
+                    job_status="retrying",
+                )
+                await event_bus.publish_session_event(session_id, retrying_event)
+                await event_bus.publish_broadcast(retrying_event)
                 # Do NOT clean up: the orchestrator resumes from already-succeeded
                 # steps (e.g. raw_conversion), so converted FITS in work_dir must
                 # be preserved across the ARQ-level retry.

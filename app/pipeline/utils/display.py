@@ -378,7 +378,11 @@ def summarize_profile_config(config: dict | None) -> list[tuple[str, str]]:
         pairs.append(("Camera", "stock DSLR"))
 
     if config.get("denoise_enabled"):
-        pairs.append(("Denoise", f"{config.get('denoise_strength', 0):.2f}"))
+        engine = str(config.get("denoise_engine", "cosmic_clarity")).lower()
+        engine_label = "GraXpert" if engine == "graxpert" else "Cosmic"
+        pairs.append(
+            ("Denoise", f"{engine_label} {config.get('denoise_strength', 0):.2f}")
+        )
 
     if config.get("sharpen_enabled"):
         pairs.append(("Sharpen", _on_off(True)))

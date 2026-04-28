@@ -52,9 +52,13 @@ class ProcessingProfileConfig(SQLModel):
             plate-solve).  Independent from ``camera_defiltered``: kept
             opt-in because catalogue lookup may fail on small FOV / sparse
             star fields.
-        denoise_enabled: Whether to run Cosmic Clarity Denoise.
-        denoise_strength: Denoise strength (0.0–1.0).
+        denoise_enabled: Whether to run the AI denoise step.
+        denoise_engine: ``"cosmic_clarity"`` (default) or ``"graxpert"``.
+        denoise_strength: Denoise strength (0.0–1.0). Shared across engines.
         denoise_luminance_only: Apply denoise to luminance channel only.
+            Cosmic Clarity-only flag (silently ignored by GraXpert).
+        denoise_graxpert_ai_model: GraXpert denoise model version (e.g. ``"3.0.2"``).
+        denoise_graxpert_batch_size: GraXpert tile batch size (1–32, default 4).
         sharpen_enabled: Whether to run Cosmic Clarity Sharpen.
         sharpen_stellar_amount: Stellar sharpening amount (0.0–1.0).
         sharpen_nonstellar_amount: Non-stellar (nebula) sharpening amount (0.0–1.0).
@@ -113,11 +117,28 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Denoise ───────────────────────────────────────────────────────────────
     denoise_enabled: bool = True
+    # ``denoise_engine`` selects which AI backend runs the denoise step.
+    # ``cosmic_clarity`` (default) is the historical engine and is well-tuned
+    # for emission nebulae.  ``graxpert`` uses GraXpert's 3.x ``-cmd denoising``
+    # mode which is generally more aggressive and better at preserving fine
+    # stellar detail; useful as an alternative on noisy galaxy frames.
+    denoise_engine: str = "cosmic_clarity"
+    # Strength is shared across engines (sémantique 0–1 compatible). Cosmic
+    # Clarity treats it as a blend factor; GraXpert maps it to the ``-strength``
+    # CLI flag (also clamped 0–1 server-side).
     denoise_strength: float = 0.8
     # When ``True`` Cosmic Clarity processes only the luminance channel which
     # preserves chrominance — important for emission-line targets where the
-    # red channel carries the bulk of the Hα signal.
+    # red channel carries the bulk of the Hα signal.  Ignored by GraXpert
+    # (which has no equivalent flag).
     denoise_luminance_only: bool = False
+    # GraXpert-specific knobs (only used when ``denoise_engine == 'graxpert'``).
+    # The model version must match a folder under ``GraXpert/denoise-ai-models/``
+    # in the models volume; ``3.0.2`` is the latest at the time of writing.
+    denoise_graxpert_ai_model: str = "3.0.2"
+    # Number of tiles processed in parallel by GraXpert (1–32).  Higher values
+    # are faster but may cause GPU OOM on large frames.  Clamped server-side.
+    denoise_graxpert_batch_size: int = 4
 
     # ── Sharpen ───────────────────────────────────────────────────────────────
     sharpen_enabled: bool = True
@@ -151,6 +172,7 @@ PRESET_QUICK = ProcessingProfileConfig(
     camera_defiltered=True,
     photometric_calibration_enabled=False,
     denoise_enabled=True,
+    denoise_engine="cosmic_clarity",
     denoise_strength=0.5,
     sharpen_enabled=False,
     super_resolution_enabled=False,
@@ -174,6 +196,7 @@ PRESET_STANDARD = ProcessingProfileConfig(
     camera_defiltered=True,
     photometric_calibration_enabled=False,
     denoise_enabled=True,
+    denoise_engine="cosmic_clarity",
     # Reduced from 0.8 → 0.55: Cosmic Clarity at strength ≥0.7 erases faint
     # nebular filaments on emission targets (M42 wings, IFN).
     denoise_strength=0.55,
@@ -206,6 +229,7 @@ PRESET_QUALITY = ProcessingProfileConfig(
     # lookup, which fail silently on small FOV / sparse fields.
     photometric_calibration_enabled=False,
     denoise_enabled=True,
+    denoise_engine="cosmic_clarity",
     # Reduced from 0.9 → 0.65 (was destroying faint signal in tests).
     denoise_strength=0.65,
     denoise_luminance_only=True,
