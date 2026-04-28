@@ -23,7 +23,7 @@
     "stretch_method": "asinh",
     "stretch_strength": 150.0,
     "color_calibration_enabled": false,
-    "camera_defiltered": false,
+    "camera_defiltered": true,
     "photometric_calibration_enabled": true,
     "denoise_enabled": true,
     "denoise_strength": 0.80,

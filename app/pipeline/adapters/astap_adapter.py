@@ -285,8 +285,11 @@ class AstapAdapter:
         (GraXpert, Siril's headless ``pcc`` command) therefore see a
         non-platesolved image.
 
-        This helper reads the sidecar (if present) and copies its WCS-related
-        keywords into the FITS primary header.
+        This helper reads the sidecar (if present) and copies its
+        WCS-related numeric keywords into the FITS primary header. We
+        deliberately whitelist keys and parse line-by-line so malformed
+        ``CONTINUE`` / long-string cards (which astropy refuses in strict
+        mode) don't abort the merge.
         """
         from astropy.io import fits  # noqa: PLC0415
 
@@ -294,33 +297,41 @@ class AstapAdapter:
         if not wcs_path.exists():
             return
 
-        try:
-            sidecar_hdr = fits.Header.fromtextfile(str(wcs_path))
-        except Exception:  # noqa: BLE001
-            # Some ASTAP versions terminate the sidecar with a stray END or
-            # non-FITS lines. Fall back to a tolerant manual parse.
-            sidecar_hdr = fits.Header()
-            for raw in wcs_path.read_text(errors="replace").splitlines():
-                line = raw.strip()
-                if not line or line.startswith("END"):
-                    continue
-                # FITS cards are exactly 80 chars; tolerate shorter ones too.
-                try:
-                    card = fits.Card.fromstring(line.ljust(80))
-                    if card.keyword:
-                        sidecar_hdr.append(card, end=True)
-                except Exception:  # noqa: BLE001
-                    continue
+        # Whitelist of header keys we actually need for plate-solving
+        # consumers (Siril ``pcc``). Anything outside this list is ignored
+        # to keep the merge safe.
+        wcs_prefixes = ("CRPIX", "CRVAL", "CTYPE", "CUNIT", "CDELT",
+                        "CROTA", "CD", "PC", "A_", "B_", "AP_", "BP_")
+        wcs_keys = {
+            "WCSAXES", "RADESYS", "EQUINOX", "LONPOLE", "LATPOLE",
+            "PLTSOLVD", "OBJCTRA", "OBJCTDEC", "RA", "DEC",
+        }
 
-        if len(sidecar_hdr) == 0:
+        merged: list[tuple[str, Any, str]] = []
+        for raw in wcs_path.read_text(errors="replace").splitlines():
+            line = raw.rstrip()
+            if not line or line.startswith(("END", "COMMENT", "HISTORY", "CONTINUE")):
+                continue
+            # FITS card layout: 8-char keyword, "= ", value [/ comment]
+            if "=" not in line:
+                continue
+            key = line[:8].strip().upper()
+            if not key:
+                continue
+            if key not in wcs_keys and not key.startswith(wcs_prefixes):
+                continue
+            try:
+                card = fits.Card.fromstring(line.ljust(80))
+                if card.keyword:
+                    merged.append((card.keyword, card.value, card.comment))
+            except Exception:  # noqa: BLE001
+                continue
+
+        if not merged:
             return
 
-        # Copy any keyword present in the sidecar — these are exactly the
-        # ones ASTAP considers part of the WCS solution.
         with fits.open(str(fits_path), mode="update") as hdul:
             tgt_hdr = hdul[0].header
-            for card in sidecar_hdr.cards:
-                if not card.keyword or card.keyword in ("HISTORY", "COMMENT", ""):
-                    continue
-                tgt_hdr[card.keyword] = (card.value, card.comment)
+            for key, value, comment in merged:
+                tgt_hdr[key] = (value, comment)
             hdul.flush()
