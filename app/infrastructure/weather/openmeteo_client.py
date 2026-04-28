@@ -167,7 +167,12 @@ class OpenMeteoClient:
                 "cloud_cover,cloud_cover_low,"
                 "relative_humidity_2m,dew_point_2m,wind_speed_10m"
             ),
-            "daily": "sunrise,sunset,moonrise,moonset,moon_phase",
+            # NOTE: Open-Meteo's free ``/v1/forecast`` daily aggregation only
+            # exposes solar events (``sunrise``/``sunset``); moon variables
+            # (``moonrise``, ``moonset``, ``moon_phase``) are NOT supported and
+            # requesting them yields HTTP 400. Moon data is computed by
+            # :mod:`app.services.planner_service` via Skyfield instead.
+            "daily": "sunrise,sunset",
             "timezone": "auto",
             "forecast_days": days,
         }
