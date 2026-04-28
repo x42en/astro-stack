@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.domain.visibility import ObjectVisibility, ObservationWindow
 from app.infrastructure.weather.cache import (
     WeatherCache,
@@ -50,7 +50,7 @@ def get_cache() -> WeatherCache:
     """FastAPI dependency: shared :class:`WeatherCache`."""
     global _cache
     if _cache is None:
-        _cache = WeatherCache(settings.redis_url)
+        _cache = WeatherCache(get_settings().redis_url)
     return _cache
 
 
@@ -114,7 +114,7 @@ async def _summarise_weather(
         except Exception:  # pragma: no cover - fail-soft
             return None
         payload = forecast.model_dump(mode="json")
-        await cache.set_json(cache_key, payload, settings.weather_cache_ttl_s)
+        await cache.set_json(cache_key, payload, get_settings().weather_cache_ttl_s)
 
     forecast = WeatherForecast.model_validate(payload)
     samples = [
@@ -150,7 +150,7 @@ async def reverse_geocode(
     if cached is not None:
         return GeoLocation.model_validate(cached)
     location = await client.reverse_geocode(lat, lon)
-    await cache.set_json(cache_key, location.model_dump(mode="json"), settings.geocode_cache_ttl_s)
+    await cache.set_json(cache_key, location.model_dump(mode="json"), get_settings().geocode_cache_ttl_s)
     return location
 
 

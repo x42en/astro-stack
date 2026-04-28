@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Optional
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.errors import ErrorCode, ExternalServiceException, NotFoundException
 from app.core.logging import get_logger
 from app.domain.visibility import AltAzPoint, ObjectVisibility, ObservationWindow
@@ -77,7 +77,7 @@ class PlannerService:
     """Compute night observation windows and rank visible deep-sky targets."""
 
     def __init__(self, ephemeris_path: Optional[str] = None) -> None:
-        self._ephemeris_path = ephemeris_path or settings.ephemeris_path
+        self._ephemeris_path = ephemeris_path or get_settings().ephemeris_path
 
     # — async wrappers — ------------------------------------------------------
 

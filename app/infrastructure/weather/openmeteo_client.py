@@ -17,7 +17,7 @@ from typing import Any, Optional
 import httpx
 from pydantic import BaseModel, Field
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.errors import ErrorCode, ExternalServiceException, ValidationException
 from app.core.logging import get_logger
 
@@ -155,7 +155,7 @@ class OpenMeteoClient:
             "timezone": "auto",
             "forecast_days": days,
         }
-        payload = await self._get_json(settings.openmeteo_forecast_url, params)
+        payload = await self._get_json(get_settings().openmeteo_forecast_url, params)
         return _parse_forecast(payload)
 
     async def reverse_geocode(self, latitude: float, longitude: float) -> GeoLocation:
@@ -171,7 +171,7 @@ class OpenMeteoClient:
             "language": "en",
             "count": 1,
         }
-        payload = await self._get_json(settings.openmeteo_geocode_url, params)
+        payload = await self._get_json(get_settings().openmeteo_geocode_url, params)
         results = payload.get("results") or []
         if not results:
             return GeoLocation(
