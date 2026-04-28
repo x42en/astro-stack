@@ -1,4 +1,9 @@
-"""Cosmic Clarity AI denoise pipeline step."""
+"""AI denoise pipeline step (Cosmic Clarity or GraXpert engine).
+
+The active engine is selected per-profile via ``denoise_engine``.  Both
+engines share the same input/output convention so downstream steps (sharpen,
+star-separation) are agnostic to the choice.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.pipeline.adapters.cosmic_adapter import CosmicClarityAdapter
+from app.pipeline.adapters.graxpert_adapter import GraXpertAdapter
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
 from app.pipeline.utils.preview import save_step_preview
 
@@ -13,29 +19,37 @@ logger = get_logger(__name__)
 
 
 class DenoiseStep(PipelineStep):
-    """Applies AI-based noise reduction using Cosmic Clarity Denoise."""
+    """Applies AI-based noise reduction using Cosmic Clarity or GraXpert."""
 
     name = "denoise"
-    display_name = "AI Noise Reduction (Cosmic Clarity)"
+    display_name = "AI Noise Reduction"
 
-    def __init__(self, adapter: CosmicClarityAdapter | None = None) -> None:
+    def __init__(
+        self,
+        adapter: CosmicClarityAdapter | None = None,
+        graxpert_adapter: GraXpertAdapter | None = None,
+    ) -> None:
         """Initialise the step.
 
         Args:
-            adapter: Optional Cosmic Clarity adapter; created from settings if not provided.
+            adapter: Optional Cosmic Clarity adapter (default engine).
+            graxpert_adapter: Optional GraXpert adapter; only instantiated
+                when the active profile selects ``denoise_engine='graxpert'``.
         """
-        self._adapter = adapter or CosmicClarityAdapter()
+        self._cosmic = adapter or CosmicClarityAdapter()
+        self._graxpert = graxpert_adapter  # lazy: built on first GraXpert run
 
     async def execute(
         self,
         context: PipelineContext,
         config: dict[str, Any],
     ) -> StepResult:
-        """Run Cosmic Clarity denoise on the current best image.
+        """Run AI denoise on the current best image using the configured engine.
 
         Args:
-            context: Pipeline context. Uses ``background_removed_path`` if set,
-                otherwise ``stacked_fits_path``.
+            context: Pipeline context. Uses ``stretched_fits_path`` if set,
+                otherwise ``background_removed_path``, otherwise
+                ``stacked_fits_path``.
             config: Profile config dict with ``denoise_*`` fields.
 
         Returns:
@@ -62,17 +76,59 @@ class DenoiseStep(PipelineStep):
         output_path = context.work_dir / "output" / "denoised.fits"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._adapter.gpu_device = context.gpu_device
+        # Engine dispatch ── default to the historical Cosmic Clarity engine
+        # so existing profiles (and the migrations data backfill) keep their
+        # behaviour unchanged.
+        engine = str(config.get("denoise_engine", "cosmic_clarity")).lower()
+        strength = float(config.get("denoise_strength", 0.8))
 
-        await self._adapter.denoise(
-            input_path=input_path,
-            output_path=output_path,
-            strength=float(config.get("denoise_strength", 0.8)),
-            luminance_only=bool(config.get("denoise_luminance_only", False)),
-        )
+        if engine == "graxpert":
+            if self._graxpert is None:
+                self._graxpert = GraXpertAdapter()
+            self._graxpert.gpu_device = context.gpu_device
+            ai_model = str(config.get("denoise_graxpert_ai_model", "3.0.2"))
+            batch_size = int(config.get("denoise_graxpert_batch_size", 4))
+            logger.info(
+                "denoise_engine_selected",
+                engine="graxpert",
+                strength=strength,
+                ai_model=ai_model,
+                batch_size=batch_size,
+            )
+            await self._graxpert.denoise(
+                input_path=input_path,
+                output_path=output_path,
+                strength=strength,
+                ai_model=ai_model,
+                batch_size=batch_size,
+            )
+            engine_label = "GraXpert"
+        else:
+            # ``cosmic_clarity`` (default) and any unknown value fall back here.
+            if engine != "cosmic_clarity":
+                logger.warning(
+                    "denoise_engine_unknown",
+                    requested=engine,
+                    fallback="cosmic_clarity",
+                )
+            self._cosmic.gpu_device = context.gpu_device
+            luminance_only = bool(config.get("denoise_luminance_only", False))
+            logger.info(
+                "denoise_engine_selected",
+                engine="cosmic_clarity",
+                strength=strength,
+                luminance_only=luminance_only,
+            )
+            await self._cosmic.denoise(
+                input_path=input_path,
+                output_path=output_path,
+                strength=strength,
+                luminance_only=luminance_only,
+            )
+            engine_label = "Cosmic Clarity"
 
         context.denoised_path = output_path
-        logger.info("denoise_done", output=str(output_path))
+        logger.info("denoise_done", output=str(output_path), engine=engine_label)
 
         # Generate a JPEG preview from the denoised image. Non-critical.
         preview_url: str | None = None
@@ -87,7 +143,8 @@ class DenoiseStep(PipelineStep):
             success=True,
             metadata={
                 "denoised_path": str(output_path),
+                "denoise_engine": engine_label,
                 **({"preview_url": preview_url} if preview_url else {}),
             },
-            message="AI noise reduction complete.",
+            message=f"AI noise reduction complete ({engine_label}).",
         )

@@ -33,6 +33,9 @@ from app.domain.profile import ProcessingProfileConfig
 from app.domain.ws_event import (
     CompletedEvent,
     ErrorEvent,
+    LogEvent,
+    LogLevel,
+    LogSource,
     ProgressEvent,
     SessionStatusEvent,
     StepStatusEvent,
@@ -49,7 +52,12 @@ from app.pipeline.retry import RetryPolicy
 logger = get_logger(__name__)
 
 
-def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
+def _fits_to_preview_jpeg(
+    fits_path: "Path",
+    output_path: "Path",
+    *,
+    camera_defiltered: bool = True,
+) -> None:
     """Render a processed FITS image to a JPEG preview (sync, run in thread).
 
     Delegates to the shared display stretch in
@@ -59,6 +67,9 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     Args:
         fits_path: Source FITS file produced by a pipeline step.
         output_path: Destination JPEG path (parent directory is created if needed).
+        camera_defiltered: Forwarded to the display stretch; when ``False``
+            (stock DSLR) the per-channel red black-point is softened to
+            preserve the residual Hα signal.
     """
     import io as _io  # noqa: PLC0415
     from pathlib import Path as _Path  # noqa: PLC0415
@@ -74,7 +85,7 @@ def _fits_to_preview_jpeg(fits_path: "Path", output_path: "Path") -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        data = load_fits_display_rgb(fits_path)
+        data = load_fits_display_rgb(fits_path, camera_defiltered=camera_defiltered)
     except ValueError:
         logger.warning("fits_preview_no_data", path=str(fits_path))
         return
@@ -199,7 +210,12 @@ class PipelineOrchestrator:
 
         preview_path = self._file_store.step_preview_path(self.session_id, step_name)
         try:
-            await asyncio.to_thread(_fits_to_preview_jpeg, fits_path, preview_path)
+            await asyncio.to_thread(
+                _fits_to_preview_jpeg,
+                fits_path,
+                preview_path,
+                camera_defiltered=bool(self.profile_config.camera_defiltered),
+            )
             logger.info(
                 "step_preview_generated",
                 step=step_name,
@@ -262,8 +278,12 @@ class PipelineOrchestrator:
         existing_steps = {s.step_name: s for s in await self._step_repo.list_by_job(self.job_id)}
 
         config_dict = self.profile_config.model_dump()
-        # Expose the active profile config to downstream steps (notably the
-        # ExportStep which embeds it into output metadata / badges).
+        # Apply per-object-type adaptive overrides (galaxy → skip GraXpert,
+        # softer stretch / denoise / sharpen, etc.).  Mutates ``config_dict``
+        # in place so every step sees the adjusted values.
+        await self._apply_adaptive_overrides(context, config_dict)
+        # Expose the (possibly adapted) profile config to downstream steps
+        # — notably the ExportStep which embeds it into output metadata.
         context.metadata["profile_config"] = config_dict
         final_outputs: dict[str, Any] = {}
 
@@ -635,6 +655,95 @@ class PipelineOrchestrator:
         context.metadata["target_ra"] = session_record.target_ra
         context.metadata["target_dec"] = session_record.target_dec
         context.metadata["object_name_hint"] = session_record.object_name
+
+    async def _apply_adaptive_overrides(
+        self,
+        context: PipelineContext,
+        config_dict: dict[str, Any],
+    ) -> None:
+        """Apply per-object-type adaptive overrides to ``config_dict`` in-place.
+
+        Looks up the bundled catalogue from ``object_name_hint`` /
+        ``object_name``.  For known object types (galaxy, cluster, etc.) it
+        merges :data:`ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE` into the config
+        and, for galaxies specifically, disables the gradient_removal step
+        because both GraXpert AI and polynomial modes destroy the FITS
+        on low-SNR diffuse targets.
+
+        Each override is applied **only when the new value is strictly
+        less than the current value** so user-customised profiles already
+        lowering a setting are never overridden upward.
+
+        Args:
+            context: Pipeline context (target name read from metadata).
+            config_dict: Mutable profile config dict shared across steps.
+        """
+        from app.pipeline.utils.object_type import (  # noqa: PLC0415
+            ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE,
+            SKIP_GRADIENT_REMOVAL_TYPES,
+            resolve_and_cache_object_type,
+        )
+
+        object_type = resolve_and_cache_object_type(context)
+        logger.info(
+            "adaptive_overrides_lookup",
+            object_name_hint=context.metadata.get("object_name_hint"),
+            object_name=context.metadata.get("object_name"),
+            resolved_type=object_type,
+        )
+        if object_type is None:
+            return
+
+        applied: dict[str, dict[str, Any]] = {}
+
+        # 1. Numeric field overrides (stretch / denoise / sharpen).
+        overrides = ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE.get(object_type, {})
+        for field, new_value in overrides.items():
+            current = config_dict.get(field)
+            if not isinstance(current, (int, float)):
+                continue
+            if (
+                field == "stretch_strength"
+                and config_dict.get("stretch_method") != "asinh"
+            ):
+                continue
+            if new_value < current:
+                applied[field] = {"from": float(current), "to": float(new_value)}
+                config_dict[field] = new_value
+
+        # 2. Boolean policy overrides (skip GraXpert on galaxies).
+        if (
+            object_type in SKIP_GRADIENT_REMOVAL_TYPES
+            and config_dict.get("gradient_removal_enabled", False)
+        ):
+            applied["gradient_removal_enabled"] = {"from": True, "to": False}
+            config_dict["gradient_removal_enabled"] = False
+
+        if not applied:
+            return
+
+        context.metadata["adaptive_overrides_applied"] = {
+            "object_type": object_type,
+            "fields": applied,
+        }
+        logger.info(
+            "adaptive_overrides_applied",
+            object_type=object_type,
+            overrides=applied,
+        )
+        summary = ", ".join(
+            f"{k}: {v['from']}→{v['to']}" for k, v in applied.items()
+        )
+        await self.event_bus.publish_job_event(
+            self.job_id,
+            LogEvent(
+                job_id=self.job_id,
+                session_id=self.session_id,
+                level=LogLevel.INFO,
+                source=LogSource.SYSTEM,
+                message=f"Adaptive profile ({object_type}): {summary}",
+            ),
+        )
 
     @staticmethod
     def _restore_context_paths(

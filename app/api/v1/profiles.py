@@ -149,18 +149,32 @@ def _slugify(value: str) -> str:
 async def list_profiles(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
+    shared_only: bool = Query(
+        default=False,
+        description=(
+            "When True, return only profiles shared by other users (community "
+            "browser). The caller's own profiles are excluded."
+        ),
+    ),
     db: AsyncSession = Depends(get_async_session),
     user: Optional[dict] = Depends(get_current_user),
 ) -> list[ProcessingProfileRead]:
     """List profiles visible to the caller.
 
-    Returns the caller's own profiles, profiles published via the share flag
-    and unowned (system) profiles.  In anonymous mode every profile is
-    returned.
+    Default behaviour returns the caller's own profiles, profiles published
+    via the share flag and unowned (system) profiles.  In anonymous mode
+    every profile is returned.
+
+    When ``shared_only=True`` the response is restricted to profiles flagged
+    as shared and **not** owned by the caller \u2014 the data source for the
+    community profile browser.
     """
     repo = ProfileRepository(db)
     user_id = _current_user_id(user)
-    profiles = await repo.list_visible_to(user_id, offset=offset, limit=limit)
+    if shared_only:
+        profiles = await repo.list_shared_by_others(user_id, offset=offset, limit=limit)
+    else:
+        profiles = await repo.list_visible_to(user_id, offset=offset, limit=limit)
     return [_to_read(p, user_id) for p in profiles]
 
 

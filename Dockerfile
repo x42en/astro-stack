@@ -106,6 +106,7 @@ RUN pip install \
         "pydantic[email]" pydantic-settings email-validator \
         "python-jose[cryptography]" "passlib[bcrypt]" \
         httpx astropy astroquery rawpy numpy Pillow ExifRead \
+        skyfield timezonefinder \
         watchdog python-multipart aiofiles anyio structlog \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
@@ -196,8 +197,28 @@ FROM ai-tools AS final
 
 # Create non-root user for the application
 RUN useradd -m -s /bin/bash astro \
-    && mkdir -p /inbox /sessions /output /models \
-    && chown -R astro:astro /inbox /sessions /output /models
+    && mkdir -p /inbox /sessions /output /models /opt/ephemerides \
+    && chown -R astro:astro /inbox /sessions /output /models /opt/ephemerides
+
+# Skyfield ephemeris (DE440s, ~32 MB, covers 1849-2150) — bundled to keep
+# planning offline. Supersedes the older DE421 with improved planetary
+# positions; the small (\"s\") variant trims the time span to limit size.
+# Network failure is non-fatal at build time; planner_service will warn at boot.
+# A zero-byte file is *worse* than a missing one (jplephem crashes with a
+# cryptic error), so we explicitly delete the artefact when the download
+# fails or produces an empty file.
+RUN set -eu; \
+    if wget -q --tries=3 --timeout=120 \
+            "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440s.bsp" \
+            -O /opt/ephemerides/de440s.bsp \
+        && [ -s /opt/ephemerides/de440s.bsp ] \
+        && [ "$(stat -c %s /opt/ephemerides/de440s.bsp)" -gt 1024 ]; then \
+        chown astro:astro /opt/ephemerides/de440s.bsp; \
+        echo "DE440s ephemeris downloaded ($(stat -c %s /opt/ephemerides/de440s.bsp) bytes)"; \
+    else \
+        rm -f /opt/ephemerides/de440s.bsp; \
+        echo "WARNING: DE440s ephemeris download failed — planner will be disabled until file is provided"; \
+    fi
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH" \

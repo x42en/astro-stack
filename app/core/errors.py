@@ -50,6 +50,7 @@ class ErrorCode(str, Enum):
     PIPE_SIRIL_INIT_FAILED = "PIPE_SIRIL_INIT_FAILED"
     PIPE_SIRIL_COMMAND_ERROR = "PIPE_SIRIL_COMMAND_ERROR"
     PIPE_SIRIL_TIMEOUT = "PIPE_SIRIL_TIMEOUT"
+    PIPE_REGISTRATION_FAILED = "PIPE_REGISTRATION_FAILED"
     PIPE_DISK_FULL = "PIPE_DISK_FULL"
     PIPE_PLATE_SOLVE_FAILED = "PIPE_PLATE_SOLVE_FAILED"
     PIPE_GRADIENT_REMOVAL_FAILED = "PIPE_GRADIENT_REMOVAL_FAILED"
@@ -57,6 +58,7 @@ class ErrorCode(str, Enum):
     PIPE_COSMIC_DENOISE_FAILED = "PIPE_COSMIC_DENOISE_FAILED"
     PIPE_COSMIC_SHARPEN_FAILED = "PIPE_COSMIC_SHARPEN_FAILED"
     PIPE_COSMIC_SUPERRES_FAILED = "PIPE_COSMIC_SUPERRES_FAILED"
+    PIPE_GRAXPERT_DENOISE_FAILED = "PIPE_GRAXPERT_DENOISE_FAILED"
     PIPE_STAR_SEPARATION_FAILED = "PIPE_STAR_SEPARATION_FAILED"
     PIPE_EXPORT_FAILED = "PIPE_EXPORT_FAILED"
     PIPE_STEP_NOT_FOUND = "PIPE_STEP_NOT_FOUND"
@@ -85,6 +87,21 @@ class ErrorCode(str, Enum):
     SYS_REDIS_UNAVAILABLE = "SYS_REDIS_UNAVAILABLE"
     SYS_DATABASE_ERROR = "SYS_DATABASE_ERROR"
     SYS_STORAGE_ERROR = "SYS_STORAGE_ERROR"
+    SYS_EXTERNAL_SERVICE_ERROR = "SYS_EXTERNAL_SERVICE_ERROR"
+
+    # ── Observation site ─────────────────────────────────────────────────────
+    SITE_NOT_FOUND = "SITE_NOT_FOUND"
+    SITE_VALIDATION_ERROR = "SITE_VALIDATION_ERROR"
+
+    # ── Followed object ──────────────────────────────────────────────────────
+    FOLLOW_NOT_FOUND = "FOLLOW_NOT_FOUND"
+    FOLLOW_ALREADY_EXISTS = "FOLLOW_ALREADY_EXISTS"
+    FOLLOW_OBJECT_UNKNOWN = "FOLLOW_OBJECT_UNKNOWN"
+
+    # ── Planning ─────────────────────────────────────────────────────────────
+    PLAN_OBJECT_NOT_FOUND = "PLAN_OBJECT_NOT_FOUND"
+    PLAN_INVALID_COORDS = "PLAN_INVALID_COORDS"
+    PLAN_DATE_OUT_OF_RANGE = "PLAN_DATE_OUT_OF_RANGE"
 
 
 class AstroStackException(Exception):
@@ -240,3 +257,23 @@ class AuthException(AstroStackException):
         status_code: int = 401,
     ) -> None:
         super().__init__(error_code, message, status_code=status_code)
+
+
+class ExternalServiceException(AstroStackException):
+    """Raised when an upstream third-party service fails (HTTP 502).
+
+    Used by the open-meteo client and any other outbound HTTP integration.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            ErrorCode.SYS_EXTERNAL_SERVICE_ERROR,
+            message,
+            status_code=502,
+            details=details,
+            retryable=True,
+        )

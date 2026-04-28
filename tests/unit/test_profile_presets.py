@@ -37,9 +37,24 @@ class TestPresetConfigs:
         """Quality preset must enable drizzle integration."""
         assert PRESET_QUALITY.drizzle_enabled is True
 
-    def test_quality_preset_enables_super_resolution(self) -> None:
-        """Quality preset must enable super-resolution."""
-        assert PRESET_QUALITY.super_resolution_enabled is True
+    def test_quality_preset_super_resolution_is_opt_in(self) -> None:
+        """Super-resolution is heavy; QUALITY no longer enables it by default."""
+        assert PRESET_QUALITY.super_resolution_enabled is False
+
+    def test_quality_preset_star_separation_is_opt_in(self) -> None:
+        """Star separation is heavy; QUALITY no longer enables it by default."""
+        assert PRESET_QUALITY.star_separation_enabled is False
+
+    def test_all_presets_default_to_defiltered_camera(self) -> None:
+        """Defiltered cameras are the modern astrophoto norm \u2014 sensible default."""
+        assert PRESET_QUICK.camera_defiltered is True
+        assert PRESET_STANDARD.camera_defiltered is True
+        assert PRESET_QUALITY.camera_defiltered is True
+
+    def test_standard_preset_uses_luminance_only_denoise(self) -> None:
+        """Luminance-only denoise preserves chrominance (H\u03b1)."""
+        assert PRESET_STANDARD.denoise_luminance_only is True
+        assert PRESET_QUALITY.denoise_luminance_only is True
 
     def test_denoise_strength_increases_from_quick_to_quality(self) -> None:
         """Denoise strength should increase from quick → quality."""

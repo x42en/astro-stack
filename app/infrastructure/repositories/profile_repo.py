@@ -116,6 +116,34 @@ class ProfileRepository(BaseRepository[ProcessingProfile]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_shared_by_others(
+        self,
+        user_id: Optional[uuid.UUID],
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[ProcessingProfile]:
+        """Return community-shared profiles **not** owned by ``user_id``.
+
+        Used to power the community profile browser.  In anonymous mode every
+        shared profile is returned (no owner filter).  Unowned (system)
+        profiles are also included so they remain discoverable.
+        """
+        stmt = select(ProcessingProfile).where(
+            ProcessingProfile.is_shared.is_(True)  # type: ignore[union-attr]
+        )
+        if user_id is not None:
+            stmt = stmt.where(
+                (ProcessingProfile.owner_user_id != user_id)
+                | (ProcessingProfile.owner_user_id.is_(None))  # type: ignore[union-attr]
+            )
+        stmt = (
+            stmt.order_by(ProcessingProfile.name)  # type: ignore[attr-defined]
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def find_available_name(
         self,
         base_name: str,

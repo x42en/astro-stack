@@ -51,6 +51,7 @@ def load_fits_display_rgb(
     high_pct: float = _DEFAULT_HIGH_PCT,
     asinh_strength: float = _DEFAULT_ASINH_STRENGTH,
     per_channel: bool = True,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Load a FITS image and return a display-ready float array in ``[0, 1]``.
 
@@ -67,6 +68,11 @@ def load_fits_display_rgb(
         per_channel: When ``True`` and the image is RGB, compute the
             percentile clip independently per channel. This neutralises
             colour casts from an uncalibrated sky background.
+        camera_defiltered: ``True`` (default, modern astrophoto norm) keeps
+            the standard split BP/WP policy.  ``False`` (stock DSLR with
+            full IR-cut filter) softens the per-channel **red** black-point
+            so the faint residual Hα signal is not crushed when neutralising
+            the sky background.
 
     Returns:
         ``float32`` ndarray in ``[0, 1]``, RGB order if 3-channel.
@@ -107,6 +113,7 @@ def load_fits_display_rgb(
         high_pct=high_pct,
         asinh_strength=asinh_strength,
         per_channel=per_channel,
+        camera_defiltered=camera_defiltered,
     )
 
 
@@ -117,6 +124,7 @@ def _stretch_array(
     high_pct: float,
     asinh_strength: float,
     per_channel: bool,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Apply a percentile clip + optional asinh midtone stretch.
 
@@ -127,8 +135,28 @@ def _stretch_array(
     (black point) is computed **per channel** but the high percentile
     (white point) is computed **globally** across all channels so the natural
     colour balance of the signal is preserved.
+
+    When ``camera_defiltered=False`` the per-channel red black-point is
+    further attenuated (multiplied by 0.55) so the faint residual Hα of a
+    stock DSLR survives the sky-background subtraction.
+
+    Safeguard: if the input is already saturated (median > 0.95 — typically
+    the result of an over-aggressive Siril ``asinh`` on a low-surface-
+    brightness target), a soft compression is applied before the percentile
+    clip so the preview still shows usable structure instead of pure white.
     """
     arr = np.ascontiguousarray(arr, dtype=np.float32)
+
+    # ── Over-stretch safeguard ────────────────────────────────────────────
+    # When ``arr`` is mostly clipped to the white point (median > 0.95) the
+    # downstream percentile clip would compute lo ≈ hi ≈ 1.0 and fall back
+    # to the 1e-12 denom guard, producing a near-uniform image (typically
+    # all-black after the asinh).  Re-expand the upper range with a fourth
+    # power so the brightest highlights are pulled back into the displayable
+    # range while preserving relative ordering of pixel values.
+    finite = arr[np.isfinite(arr)]
+    if finite.size and float(np.median(finite)) > 0.95:
+        arr = np.power(arr, 4.0, dtype=np.float32)
 
     if arr.ndim == 3 and arr.shape[-1] == 3 and per_channel:
         # Per-channel black point — neutralises sky background cast.
@@ -136,6 +164,11 @@ def _stretch_array(
             [np.percentile(arr[..., c], low_pct) for c in range(3)],
             dtype=np.float32,
         )
+        # Stock DSLR: the IR-cut filter slashes the red signal; the per-channel
+        # red BP would then subtract most of what the sensor still captured of
+        # Hα.  Soften it (factor 0.55) to keep the warm tone of emission targets.
+        if not camera_defiltered:
+            lo[0] = lo[0] * 0.55
         # Global white point — preserves emission-line channel dominance
         # (e.g. Hα-rich M42 stays red; Oxygen-III-rich M27 stays teal).
         hi = float(np.percentile(arr, high_pct))
@@ -193,7 +226,8 @@ def apply_hdr_polish(
     *,
     saturation: float = 1.18,
     midtone_contrast: float = 0.18,
-    highlight_rolloff: float = 0.92,
+    highlight_rolloff: float = 0.85,
+    camera_defiltered: bool = True,
 ) -> np.ndarray:
     """Apply a gentle HDR-style polish to a normalised ``[0, 1]`` RGB array.
 
@@ -214,7 +248,12 @@ def apply_hdr_polish(
         saturation: Multiplicative gain on HSV S channel (≥ 0).
         midtone_contrast: Strength of the midtone S-curve (0 disables).
         highlight_rolloff: Threshold above which highlights are softly
-            compressed (set to 1.0 to disable).
+            compressed (set to 1.0 to disable).  Default 0.85 keeps bright
+            star cores from clipping to pure white — a generic,
+            object-agnostic recovery of any over-exposed region.
+        camera_defiltered: When ``False`` (stock DSLR) apply a small extra
+            saturation gain (+0.10) and a +5% red-channel boost to compensate
+            for the IR-cut filter attenuation on Hα.
 
     Returns:
         New array with the same shape and dtype as ``arr``, polished and
@@ -235,9 +274,19 @@ def apply_hdr_polish(
         compressed = np.tanh(excess / (1.0 - highlight_rolloff)) * (1.0 - highlight_rolloff)
         out = np.where(out > highlight_rolloff, highlight_rolloff + compressed, out)
 
-    # 3) Saturation boost in HSV — only meaningful for RGB inputs.
-    if out.ndim == 3 and out.shape[2] == 3 and saturation != 1.0:
-        out = _boost_saturation_rgb(out, saturation)
+    # 3) Stock-DSLR red compensation — small +5% gain on the R channel before
+    #    the saturation pass so the residual Hα signal regains visibility on
+    #    emission targets.  Object-agnostic: also slightly warms star cores,
+    #    which is acceptable for an IR-cut sensor that under-records red.
+    effective_saturation = saturation
+    if not camera_defiltered:
+        if out.ndim == 3 and out.shape[2] == 3:
+            out[..., 0] = np.clip(out[..., 0] * 1.05, 0.0, 1.0)
+        effective_saturation = saturation + 0.10
+
+    # 4) Saturation boost in HSV — only meaningful for RGB inputs.
+    if out.ndim == 3 and out.shape[2] == 3 and effective_saturation != 1.0:
+        out = _boost_saturation_rgb(out, effective_saturation)
 
     return np.clip(out, 0.0, 1.0).astype(np.float32, copy=False)
 
@@ -323,9 +372,17 @@ def summarize_profile_config(config: dict | None) -> list[tuple[str, str]]:
         pairs.append(("Color cal.", _on_off(True)))
     if config.get("photometric_calibration_enabled"):
         pairs.append(("PCC", _on_off(True)))
+    # camera_defiltered is "True" by default; only mention when False so the
+    # badge stays terse for the common case.
+    if config.get("camera_defiltered") is False:
+        pairs.append(("Camera", "stock DSLR"))
 
     if config.get("denoise_enabled"):
-        pairs.append(("Denoise", f"{config.get('denoise_strength', 0):.2f}"))
+        engine = str(config.get("denoise_engine", "cosmic_clarity")).lower()
+        engine_label = "GraXpert" if engine == "graxpert" else "Cosmic"
+        pairs.append(
+            ("Denoise", f"{engine_label} {config.get('denoise_strength', 0):.2f}")
+        )
 
     if config.get("sharpen_enabled"):
         pairs.append(("Sharpen", _on_off(True)))
@@ -391,12 +448,22 @@ def render_metadata_badge(
     pad_x = max(12, int(band_h * 0.4))
     pad_y = max(6, int(band_h * 0.18))
 
-    # Translucent band drawn on a separate layer for alpha-compositing.
-    band = Image.new("RGBA", (w, band_h), (8, 12, 22, 190))
+    # ── Background: vertical fade transparent → deep black ──
+    # The band is built from a per-row alpha gradient (0 at the top edge,
+    # ~235 at the bottom) so the image content fades smoothly into the
+    # watermark instead of being cut by a hard horizontal line.
+    band = Image.new("RGBA", (w, band_h), (0, 0, 0, 0))
+    gradient = Image.new("L", (1, band_h))
+    for y in range(band_h):
+        # Cubic ease-in keeps the top barely visible and ramps quickly so
+        # the text area stays well-contrasted.
+        t = y / max(band_h - 1, 1)
+        gradient.putpixel((0, y), int(235 * (t ** 1.6)))
+    gradient = gradient.resize((w, band_h))
+    fill = Image.new("RGBA", (w, band_h), (0, 0, 0, 255))
+    fill.putalpha(gradient)
+    band = Image.alpha_composite(band, fill)
     draw = ImageDraw.Draw(band)
-
-    # Top hairline separator for visual edge against the image.
-    draw.line([(0, 0), (w, 0)], fill=(255, 255, 255, 60), width=1)
 
     # Font sizes derived from band height.
     title_size = max(11, int(band_h * 0.30))
@@ -420,9 +487,9 @@ def render_metadata_badge(
     summary = (profile_summary or [])[:6]
     if summary:
         # Compute total width from right edge.
-        chip_pad_x = max(6, int(band_h * 0.12))
-        chip_pad_y = max(2, int(band_h * 0.05))
-        chip_gap = max(6, int(band_h * 0.10))
+        chip_pad_x = max(7, int(band_h * 0.14))
+        chip_pad_y = max(3, int(band_h * 0.07))
+        chip_gap = max(8, int(band_h * 0.12))
 
         # Pre-measure each chip.
         chips = []
@@ -441,17 +508,19 @@ def render_metadata_badge(
         for text, chip_w, chip_h in reversed(chips):
             x -= chip_w
             y0 = y_center - chip_h // 2
+            # Modern rounded-square chip (radius ≈ h/3, not full pill) with
+            # subtle 1px border that picks up the UI's aesthetic.
             draw.rounded_rectangle(
                 [(x, y0), (x + chip_w, y0 + chip_h)],
-                radius=max(3, chip_h // 2),
-                fill=(255, 255, 255, 22),
-                outline=(255, 255, 255, 45),
+                radius=max(4, chip_h // 3),
+                fill=(255, 255, 255, 14),
+                outline=(255, 255, 255, 55),
                 width=1,
             )
             draw.text(
                 (x + chip_pad_x, y0 + chip_pad_y - 1),
                 text,
-                fill=(220, 230, 245, 235),
+                fill=(225, 233, 245, 240),
                 font=f_val,
             )
             x -= chip_gap

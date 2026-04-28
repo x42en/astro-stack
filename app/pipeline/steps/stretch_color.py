@@ -16,6 +16,42 @@ from app.pipeline.utils.preview import save_step_preview
 logger = get_logger(__name__)
 
 
+def _fits_stats(path: Any) -> dict[str, Any] | None:
+    """Return min/median/p997/max of a FITS file for diagnostic logging."""
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        import numpy as np  # noqa: PLC0415
+        from astropy.io import fits as _fits  # noqa: PLC0415
+
+        p = Path(path)
+        if not p.exists():
+            return None
+        with _fits.open(str(p)) as hdul:
+            for hdu in hdul:
+                if hdu.data is None:
+                    continue
+                arr = np.asarray(hdu.data, dtype=np.float32)
+                finite = arr[np.isfinite(arr)]
+                if finite.size == 0:
+                    return {"shape": list(arr.shape), "empty": True}
+                return {
+                    "shape": list(arr.shape),
+                    "min": float(np.min(finite)),
+                    "median": float(np.median(finite)),
+                    "p997": float(np.percentile(finite, 99.7)),
+                    "max": float(np.max(finite)),
+                }
+        return None
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)}
+
+
+# The override table now lives in ``app/pipeline/utils/object_type.py``
+# (``ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE``) and may tune several profile
+# fields per object type, not only the stretch strength.
+
+
 class StretchColorStep(PipelineStep):
     """Applies histogram stretch and photometric colour calibration using Siril.
 
@@ -67,6 +103,20 @@ class StretchColorStep(PipelineStep):
             shutil.copy2(str(input_path), str(siril_input))
 
         profile_config = ProcessingProfileConfig(**config)
+
+        # Adaptive profile overrides (galaxy → softer stretch, etc.) are
+        # applied centrally by the orchestrator before any step runs, so
+        # ``profile_config`` already reflects them here.  We just emit a
+        # diagnostic log for visibility.
+        object_type = context.metadata.get("object_type")
+        if object_type is not None:
+            logger.info(
+                "stretch_color_object_type",
+                object_type=object_type,
+                stretch_method=profile_config.stretch_method,
+                stretch_strength=profile_config.stretch_strength,
+            )
+
         builder = SirilScriptBuilder(
             config=profile_config,
             frames={},
@@ -107,6 +157,12 @@ class StretchColorStep(PipelineStep):
                 success=True, skipped=True, message="No stretch commands for this profile."
             )
 
+        logger.info(
+            "stretch_color_input_stats",
+            stats=_fits_stats(siril_input),
+            commands=commands,
+        )
+
         async with SirilAdapter(
             work_dir=context.work_dir / "output",
             pipe_dir=context.work_dir / "pipes_stretch",
@@ -137,7 +193,11 @@ class StretchColorStep(PipelineStep):
 
         stretched_path = context.work_dir / "output" / "for_stretch.fits"
         context.stretched_fits_path = stretched_path
-        logger.info("stretch_color_done", output=str(stretched_path))
+        logger.info(
+            "stretch_color_done",
+            output=str(stretched_path),
+            output_stats=_fits_stats(stretched_path),
+        )
 
         # Generate a JPEG preview from the stretched image. Non-critical.
         preview_url: str | None = None

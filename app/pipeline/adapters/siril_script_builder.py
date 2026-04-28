@@ -98,6 +98,11 @@ class SirilScriptBuilder:
         # rmgreen must run on linear (un-stretched) data to correctly remove
         # the double-green artefact introduced by Bayer CFA debayering.
         # Applying it after a non-linear stretch degrades colour accuracy.
+        # NOTE: rmgreen is applied regardless of ``camera_defiltered``: the
+        # green excess is a CFA debayer artefact, not a sensor-spectrum
+        # artefact.  The defiltered/stock-DSLR distinction is handled
+        # downstream by the display pipeline (per-channel red BP softening
+        # and red/saturation boost), not by Siril.
         if self.config.color_calibration_enabled:
             commands.append("rmgreen")
         commands.extend(self._stretch_commands())
@@ -206,6 +211,23 @@ class SirilScriptBuilder:
         commands.append(f"calibrate light {cal_flags}")
 
         # Registration — two-step approach compatible with Siril < 1.2.0.
+        #
+        # Tune ``findstar`` *before* registering: the Siril defaults
+        # (``radius=10``, ``sigma=1.0``, ``roundness=0.5``) are tailored for
+        # narrow-field guided rigs and reject the bloated, slightly elongated
+        # stars produced by stock DSLR lenses on wide-field shots — observed
+        # symptom is "Found 1–7 Gaussian profile stars" per frame and the
+        # subsequent "Could not find an image that aligns more than itself"
+        # alignment failure. The looser values below keep narrow-field rigs
+        # working while letting wide-field DSLR data find the hundreds of
+        # stars needed for two-pass alignment.
+        # ``reset`` first so we're not stacking deltas on top of any prior
+        # session-wide setfindstar call (Siril keeps the values process-wide).
+        commands.append("setfindstar reset")
+        commands.append(
+            "setfindstar -radius=20 -sigma=0.5 -roundness=0.3 -relax=on"
+        )
+
         # Step 1: analyse star patterns and compute per-frame transforms; writes
         # only pp_light.seq metadata (no output frames yet).
         commands.append("register pp_light -2pass")

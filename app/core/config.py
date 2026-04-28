@@ -45,6 +45,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # ── Application ──────────────────────────────────────────────────────────
@@ -97,6 +98,31 @@ class Settings(BaseSettings):
 
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"
+
+    # ── Mock auth bridge (used only when auth_enabled is False) ──────────────
+    # Deterministic UUID namespace turning a mock username into a stable user id
+    # so the data persisted today can be remapped to a real user when auth lands.
+    mock_user_namespace: str = "f5b3b1a4-9b1e-4c41-9f3d-9a3a5d1c0001"
+    mock_user_header: str = "X-Mock-User"
+
+    # ── Planning & weather (open-meteo + skyfield) ───────────────────────────
+    openmeteo_forecast_url: str = "https://api.open-meteo.com/v1/forecast"
+    # NOTE: Open-Meteo only exposes *forward* geocoding (`/v1/search`); there
+    # is no reverse endpoint. The setting is kept for forward-search use; the
+    # reverse path is served by Nominatim (see `nominatim_reverse_url`).
+    openmeteo_geocode_url: str = "https://geocoding-api.open-meteo.com/v1/search"
+    nominatim_reverse_url: str = "https://nominatim.openstreetmap.org/reverse"
+    weather_cache_ttl_s: int = Field(default=3600, ge=60)
+    geocode_cache_ttl_s: int = Field(default=86400, ge=60)
+    # Skyfield ephemeris file (DE440s, ~32 MB, 1849-2150, bundled in image).
+    # DE440s supersedes DE421 with improved planetary positions; the small ("s")
+    # variant trims the time span to keep the file size manageable while still
+    # covering well beyond any plausible planning horizon.
+    ephemeris_path: str = "/opt/ephemerides/de440s.bsp"
+    # Default minimum altitude (degrees) above the horizon to consider an
+    # object "visible" during the planning night window.
+    planner_min_altitude_deg: float = Field(default=30.0, ge=5.0, le=85.0)
+    planner_max_results: int = Field(default=50, ge=1, le=200)
 
     @field_validator("gpu_devices")
     @classmethod
