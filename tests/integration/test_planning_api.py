@@ -2,7 +2,7 @@
 
 The Open-Meteo client and the Redis-backed cache are stubbed via
 :attr:`FastAPI.dependency_overrides`. The planner runs against the in-process
-catalog; tests that need the DE421 ephemeris are skipped when it is missing.
+catalog; tests that need the DE440s ephemeris are skipped when it is missing.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from app.infrastructure.weather.openmeteo_client import (
 )
 from app.services.planner_service import PlannerService
 
-EPHEMERIS_PATH = "/opt/ephemerides/de421.bsp"
+EPHEMERIS_PATH = "/opt/ephemerides/de440s.bsp"
 _HAVE_EPHEMERIS = Path(EPHEMERIS_PATH).exists()
 
 
@@ -134,7 +134,7 @@ class TestDateValidation:
         assert "PLAN_DATE_OUT_OF_RANGE" in str(body)
 
 
-@pytest.mark.skipif(not _HAVE_EPHEMERIS, reason="DE421 ephemeris not available")
+@pytest.mark.skipif(not _HAVE_EPHEMERIS, reason="DE440s ephemeris not available")
 class TestRecommendationsSmoke:
     def test_recommendations_paris_today(self, client: TestClient) -> None:
         today = datetime.now(timezone.utc).date().isoformat()

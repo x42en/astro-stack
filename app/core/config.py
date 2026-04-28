@@ -114,8 +114,11 @@ class Settings(BaseSettings):
     nominatim_reverse_url: str = "https://nominatim.openstreetmap.org/reverse"
     weather_cache_ttl_s: int = Field(default=3600, ge=60)
     geocode_cache_ttl_s: int = Field(default=86400, ge=60)
-    # Skyfield ephemeris file (DE421, ~17 MB, bundled in image).
-    ephemeris_path: str = "/opt/ephemerides/de421.bsp"
+    # Skyfield ephemeris file (DE440s, ~32 MB, 1849-2150, bundled in image).
+    # DE440s supersedes DE421 with improved planetary positions; the small ("s")
+    # variant trims the time span to keep the file size manageable while still
+    # covering well beyond any plausible planning horizon.
+    ephemeris_path: str = "/opt/ephemerides/de440s.bsp"
     # Default minimum altitude (degrees) above the horizon to consider an
     # object "visible" during the planning night window.
     planner_min_altitude_deg: float = Field(default=30.0, ge=5.0, le=85.0)

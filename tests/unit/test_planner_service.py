@@ -1,7 +1,7 @@
 """Unit tests for :mod:`app.services.planner_service`.
 
 The pure scoring helper is tested fully. Skyfield-backed behaviour is
-exercised only when the DE421 ephemeris file is available locally.
+exercised only when the DE440s ephemeris file is available locally.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 from app.services.planner_service import PlannerService, _compute_score
 
-EPHEMERIS_PATH = "/opt/ephemerides/de421.bsp"
+EPHEMERIS_PATH = "/opt/ephemerides/de440s.bsp"
 _HAVE_EPHEMERIS = Path(EPHEMERIS_PATH).exists()
 
 
@@ -46,9 +46,9 @@ class TestComputeScore:
         assert 0.0 <= result <= 100.0
 
 
-@pytest.mark.skipif(not _HAVE_EPHEMERIS, reason="DE421 ephemeris not available")
+@pytest.mark.skipif(not _HAVE_EPHEMERIS, reason="DE440s ephemeris not available")
 class TestNightWindow:
-    """Skyfield-backed tests; require the DE421 ephemeris."""
+    """Skyfield-backed tests; require the DE440s ephemeris."""
 
     @pytest.mark.asyncio
     async def test_paris_summer_night_window_has_dark_period(self) -> None:

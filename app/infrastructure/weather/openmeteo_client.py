@@ -11,7 +11,7 @@ failure and raises :class:`ExternalServiceException` on definitive failure.
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -88,14 +88,27 @@ def _validate_coords(latitude: float, longitude: float) -> None:
         )
 
 
-def _parse_dt(raw: str | None) -> Optional[datetime]:
+def _parse_dt(raw: str | None, tz: timezone = timezone.utc) -> Optional[datetime]:
+    """Parse an ISO-8601 datetime, attaching ``tz`` if the string is naive.
+
+    Open-Meteo returns local-time strings without any offset suffix when the
+    ``timezone=auto`` parameter is used (e.g. ``2026-04-28T00:00``). Downstream
+    consumers (planner_service) work with **timezone-aware** UTC datetimes, so
+    we normalise here to avoid ``can't compare offset-naive and offset-aware``
+    comparison errors.
+    """
     if raw is None or raw == "":
         return None
-    return datetime.fromisoformat(raw)
+    dt = datetime.fromisoformat(raw)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(timezone.utc)
 
 
-def _parse_dt_required(raw: str) -> datetime:
-    return datetime.fromisoformat(raw)
+def _parse_dt_required(raw: str, tz: timezone = timezone.utc) -> datetime:
+    dt = _parse_dt(raw, tz)
+    assert dt is not None  # raw is non-empty by contract
+    return dt
 
 
 def _synthetic_location(latitude: float, longitude: float) -> "GeoLocation":
@@ -241,7 +254,15 @@ class OpenMeteoClient:
 
 
 def _parse_forecast(payload: dict[str, Any]) -> WeatherForecast:
-    """Convert a raw Open-Meteo response into a :class:`WeatherForecast`."""
+    """Convert a raw Open-Meteo response into a :class:`WeatherForecast`.
+
+    All datetimes are normalised to UTC. Open-Meteo returns local-time strings
+    when ``timezone=auto`` is used, together with a ``utc_offset_seconds``
+    field; we use that offset to interpret the strings before converting to
+    UTC, so downstream comparisons against tz-aware datetimes succeed.
+    """
+    offset_seconds = int(payload.get("utc_offset_seconds") or 0)
+    local_tz = timezone(timedelta(seconds=offset_seconds))
     hourly_raw = payload.get("hourly") or {}
     times: list[str] = hourly_raw.get("time") or []
     cloud: list[float] = hourly_raw.get("cloud_cover") or []
@@ -255,7 +276,7 @@ def _parse_forecast(payload: dict[str, Any]) -> WeatherForecast:
     for i, t in enumerate(times):
         hourly.append(
             HourlyWeather(
-                time=_parse_dt_required(t),
+                time=_parse_dt_required(t, local_tz),
                 cloud_cover_pct=float(cloud[i] if i < len(cloud) else 0.0),
                 cloud_cover_low_pct=float(cloud_low[i] if i < len(cloud_low) else 0.0),
                 visibility_m=float(vis[i] if i < len(vis) else 0.0),
@@ -278,10 +299,10 @@ def _parse_forecast(payload: dict[str, Any]) -> WeatherForecast:
         daily.append(
             DailyWeather(
                 date=date.fromisoformat(dt),
-                sunrise=_parse_dt_required(sunrise[i]),
-                sunset=_parse_dt_required(sunset[i]),
-                moonrise=_parse_dt(moonrise[i] if i < len(moonrise) else None),
-                moonset=_parse_dt(moonset[i] if i < len(moonset) else None),
+                sunrise=_parse_dt_required(sunrise[i], local_tz),
+                sunset=_parse_dt_required(sunset[i], local_tz),
+                moonrise=_parse_dt(moonrise[i] if i < len(moonrise) else None, local_tz),
+                moonset=_parse_dt(moonset[i] if i < len(moonset) else None, local_tz),
                 moon_phase=float(moon_phase[i] if i < len(moon_phase) else 0.0),
             )
         )
