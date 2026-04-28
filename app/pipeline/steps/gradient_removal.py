@@ -47,6 +47,49 @@ class GradientRemovalStep(PipelineStep):
 
         return any(models_dir.rglob("*.onnx"))
 
+    @staticmethod
+    def _copy_wcs_headers(source: Path, target: Path) -> None:
+        """Copy WCS / plate-solve headers from ``source`` onto ``target``.
+
+        GraXpert rewrites the FITS file from scratch and drops most non-data
+        keywords, including the WCS keywords written by ASTAP. This helper
+        lifts them from the platesolved input and merges them into the
+        GraXpert output so downstream Siril commands (PCC) still see a
+        plate-solved image.
+        """
+        from astropy.io import fits  # noqa: PLC0415
+
+        # Standard WCS keywords + a few SIP/CD-matrix variants commonly written
+        # by ASTAP. We deliberately keep the list narrow to avoid clobbering
+        # statistics keywords GraXpert may legitimately have updated.
+        wcs_keys = {
+            "WCSAXES", "CRPIX1", "CRPIX2", "CRVAL1", "CRVAL2",
+            "CTYPE1", "CTYPE2", "CUNIT1", "CUNIT2",
+            "CDELT1", "CDELT2", "CROTA1", "CROTA2",
+            "CD1_1", "CD1_2", "CD2_1", "CD2_2",
+            "PC1_1", "PC1_2", "PC2_1", "PC2_2",
+            "RADESYS", "EQUINOX", "LONPOLE", "LATPOLE",
+            "RA", "DEC", "OBJCTRA", "OBJCTDEC",
+            "PLTSOLVD",
+        }
+
+        with fits.open(source) as src:
+            src_hdr = src[0].header
+            keys_to_copy = [(k, src_hdr[k], src_hdr.comments[k]) for k in src_hdr if k in wcs_keys]
+            # Preserve SIP higher-order distortion terms if any (A_*, B_*, AP_*, BP_*).
+            for k in src_hdr:
+                if k.startswith(("A_", "B_", "AP_", "BP_")):
+                    keys_to_copy.append((k, src_hdr[k], src_hdr.comments[k]))
+
+        if not keys_to_copy:
+            return
+
+        with fits.open(target, mode="update") as tgt:
+            tgt_hdr = tgt[0].header
+            for key, value, comment in keys_to_copy:
+                tgt_hdr[key] = (value, comment)
+            tgt.flush()
+
     async def execute(
         self,
         context: PipelineContext,
@@ -99,6 +142,18 @@ class GradientRemovalStep(PipelineStep):
         )
 
         context.background_removed_path = output_path
+
+        # GraXpert strips the WCS / plate-solve headers from its output. Without
+        # them the downstream Siril ``pcc`` (Photometric Colour Calibration)
+        # bails out with "This command only works on plate solved images".
+        # Copy the astrometric keywords from the platesolved input back onto the
+        # GraXpert output so PCC (and any subsequent astrometry-aware step)
+        # keeps working. Best-effort: never fail the pipeline on this.
+        try:
+            self._copy_wcs_headers(context.stacked_fits_path, output_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("gradient_removal_wcs_copy_failed", error=str(exc))
+
         logger.info("gradient_removal_done", output=str(output_path), method=method)
 
         # Generate a JPEG preview from the background-removed image. Non-critical.
