@@ -170,6 +170,33 @@ class PlannerService:
             type_filter,
         )
 
+    async def moon_phases_for_dates(self, days: list[date]) -> list[float]:
+        """Return moon phase (0..1) at midnight UTC of each date.
+
+        Phase follows Open-Meteo's convention: 0 = new, 0.25 = first quarter,
+        0.5 = full, 0.75 = last quarter. Computed from the Sun/Moon ecliptic
+        longitude difference via :func:`skyfield.almanac.moon_phase` so the
+        returned value distinguishes waxing from waning, unlike a raw
+        illumination fraction. Used by the planning UI to render moon glyphs
+        in the multi-day weather strip; Open-Meteo's free forecast tier does
+        not expose this variable.
+        """
+        return await asyncio.to_thread(self._compute_moon_phases, days)
+
+    def _compute_moon_phases(self, days: list[date]) -> list[float]:
+        sf = _load_skyfield_modules()
+        eph = _load_ephemeris(self._ephemeris_path)
+        ts = sf["ts"]
+        almanac = sf["almanac"]
+        out: list[float] = []
+        for d in days:
+            midnight = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
+            t = ts.from_datetime(midnight)
+            # `moon_phase` returns the elongation in degrees (0..360).
+            angle_deg = float(almanac.moon_phase(eph, t).degrees)
+            out.append((angle_deg % 360.0) / 360.0)
+        return out
+
     # — synchronous skyfield workers — ---------------------------------------
 
     def _compute_night_window(

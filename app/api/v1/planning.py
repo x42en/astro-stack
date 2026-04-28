@@ -160,9 +160,23 @@ async def get_weather(
     lon: float = Query(..., ge=-180.0, le=180.0),
     days: int = Query(16, ge=1, le=16),
     client: OpenMeteoClient = Depends(get_client),
+    planner: PlannerService = Depends(get_planner),
 ) -> WeatherForecast:
-    """Return the raw Open-Meteo forecast for the given location."""
-    return await client.forecast(lat, lon, days=days)
+    """Return the raw Open-Meteo forecast for the given location.
+
+    The ``daily.moon_phase`` field is **not** provided by Open-Meteo's free
+    tier; we enrich each daily entry with a Skyfield-computed phase (0..1,
+    waxing→waning) so the UI can render moon glyphs correctly.
+    """
+    forecast = await client.forecast(lat, lon, days=days)
+    if forecast.daily:
+        try:
+            phases = await planner.moon_phases_for_dates([d.date for d in forecast.daily])
+        except Exception:  # pragma: no cover - fail-soft if ephemeris missing
+            phases = []
+        for day, phase in zip(forecast.daily, phases, strict=False):
+            day.moon_phase = phase
+    return forecast
 
 
 @router.get("/window", response_model=ObservationWindow)
