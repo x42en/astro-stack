@@ -328,6 +328,11 @@ class AstapAdapter:
                 continue
 
         if not merged:
+            logger.warning(
+                "astap_wcs_inject_empty",
+                sidecar=str(wcs_path),
+                first_lines=wcs_path.read_text(errors="replace").splitlines()[:6],
+            )
             return
 
         with fits.open(str(fits_path), mode="update") as hdul:
@@ -335,3 +340,8 @@ class AstapAdapter:
             for key, value, comment in merged:
                 tgt_hdr[key] = (value, comment)
             hdul.flush()
+        logger.info(
+            "astap_wcs_injected",
+            count=len(merged),
+            keys=sorted({k for k, _, _ in merged})[:20],
+        )

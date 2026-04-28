@@ -82,6 +82,11 @@ class GradientRemovalStep(PipelineStep):
                     keys_to_copy.append((k, src_hdr[k], src_hdr.comments[k]))
 
         if not keys_to_copy:
+            logger.warning(
+                "gradient_removal_wcs_copy_empty",
+                source=str(source),
+                source_n_hdu=None,
+            )
             return
 
         with fits.open(target, mode="update") as tgt:
@@ -89,6 +94,15 @@ class GradientRemovalStep(PipelineStep):
             for key, value, comment in keys_to_copy:
                 tgt_hdr[key] = (value, comment)
             tgt.flush()
+            target_n_hdu = len(tgt)
+            target_hdu0_shape = getattr(tgt[0].data, "shape", None)
+        logger.info(
+            "gradient_removal_wcs_copied",
+            count=len(keys_to_copy),
+            keys=sorted({k for k, _, _ in keys_to_copy})[:20],
+            target_n_hdu=target_n_hdu,
+            target_hdu0_shape=target_hdu0_shape,
+        )
 
     async def execute(
         self,

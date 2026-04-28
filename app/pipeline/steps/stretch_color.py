@@ -129,6 +129,32 @@ class StretchColorStep(PipelineStep):
         # break the post-processing chain.
         wcs_solved = bool(context.metadata.get("solved", False))
         if wcs_solved and profile_config.photometric_calibration_enabled:
+            # Diagnostic: inspect what's actually in the FITS Siril is about
+            # to load — confirms whether the WCS chain (ASTAP → GraXpert
+            # output → for_stretch.fits) preserved the plate-solve headers.
+            try:
+                from astropy.io import fits as _fits  # noqa: PLC0415
+
+                with _fits.open(siril_input) as _hdul:
+                    _hdr = _hdul[0].header
+                    _wcs_present = sorted(
+                        k for k in _hdr
+                        if k in {"CRPIX1", "CRVAL1", "CTYPE1", "CD1_1", "PC1_1",
+                                 "RADESYS", "PLTSOLVD"}
+                    )
+                    logger.info(
+                        "stretch_color_pcc_input_header",
+                        path=str(siril_input),
+                        n_hdu=len(_hdul),
+                        hdu0_shape=getattr(_hdul[0].data, "shape", None),
+                        wcs_keys_present=_wcs_present,
+                        ctype1=_hdr.get("CTYPE1"),
+                        ctype2=_hdr.get("CTYPE2"),
+                        crval1=_hdr.get("CRVAL1"),
+                        crval2=_hdr.get("CRVAL2"),
+                    )
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("stretch_color_pcc_input_header_failed", error=str(_exc))
             try:
                 async with SirilAdapter(
                     work_dir=context.work_dir / "output",
