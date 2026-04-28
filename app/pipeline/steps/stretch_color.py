@@ -17,6 +17,37 @@ from app.pipeline.utils.preview import save_step_preview
 logger = get_logger(__name__)
 
 
+def _fits_stats(path: Any) -> dict[str, Any] | None:
+    """Return min/median/p997/max of a FITS file for diagnostic logging."""
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        import numpy as np  # noqa: PLC0415
+        from astropy.io import fits as _fits  # noqa: PLC0415
+
+        p = Path(path)
+        if not p.exists():
+            return None
+        with _fits.open(str(p)) as hdul:
+            for hdu in hdul:
+                if hdu.data is None:
+                    continue
+                arr = np.asarray(hdu.data, dtype=np.float32)
+                finite = arr[np.isfinite(arr)]
+                if finite.size == 0:
+                    return {"shape": list(arr.shape), "empty": True}
+                return {
+                    "shape": list(arr.shape),
+                    "min": float(np.min(finite)),
+                    "median": float(np.median(finite)),
+                    "p997": float(np.percentile(finite, 99.7)),
+                    "max": float(np.max(finite)),
+                }
+        return None
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)}
+
+
 # Per-object-type override of the asinh stretch.  The defaults in
 # ``PRESET_STANDARD`` (asinh 150) are tuned for emission nebulae (Hα-rich,
 # high surface brightness).  Galaxies and clusters have a much lower mean
@@ -88,8 +119,19 @@ class StretchColorStep(PipelineStep):
         # soften the asinh strength when the object is a galaxy / cluster /
         # planetary.  Nebulae and unidentified targets keep the profile
         # values verbatim.
-        object_name_hint = context.metadata.get("object_name_hint")
+        # Try the user-supplied hint first, then fall back to the
+        # best-effort name returned by the plate-solver.
+        object_name_hint = (
+            context.metadata.get("object_name_hint")
+            or context.metadata.get("object_name")
+            or None
+        )
         object_type = resolve_object_type(object_name_hint)
+        logger.info(
+            "stretch_color_object_lookup",
+            object_name_hint=object_name_hint,
+            resolved_type=object_type,
+        )
         if object_type is not None:
             context.metadata["object_type"] = object_type
         adaptive_strength = (
@@ -111,6 +153,13 @@ class StretchColorStep(PipelineStep):
                 "stretch_strength": adaptive_strength,
                 "original_stretch_strength": original_strength,
             }
+            logger.info(
+                "stretch_color_adaptive_override",
+                object_type=object_type,
+                object_name=object_name_hint,
+                stretch_strength=adaptive_strength,
+                original_stretch_strength=original_strength,
+            )
             await self.event_bus.publish_job_event(
                 context.job_id,
                 LogEvent(
@@ -166,6 +215,12 @@ class StretchColorStep(PipelineStep):
                 success=True, skipped=True, message="No stretch commands for this profile."
             )
 
+        logger.info(
+            "stretch_color_input_stats",
+            stats=_fits_stats(siril_input),
+            commands=commands,
+        )
+
         async with SirilAdapter(
             work_dir=context.work_dir / "output",
             pipe_dir=context.work_dir / "pipes_stretch",
@@ -196,7 +251,11 @@ class StretchColorStep(PipelineStep):
 
         stretched_path = context.work_dir / "output" / "for_stretch.fits"
         context.stretched_fits_path = stretched_path
-        logger.info("stretch_color_done", output=str(stretched_path))
+        logger.info(
+            "stretch_color_done",
+            output=str(stretched_path),
+            output_stats=_fits_stats(stretched_path),
+        )
 
         # Generate a JPEG preview from the stretched image. Non-critical.
         preview_url: str | None = None
