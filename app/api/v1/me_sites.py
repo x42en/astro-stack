@@ -86,9 +86,8 @@ async def update_site(
     if existing is None:
         raise NotFoundException(ErrorCode.SITE_NOT_FOUND, f"Site {site_id} not found")
     data = payload.model_dump(exclude_unset=True)
-    for key, value in data.items():
-        setattr(existing, key, value)
-    updated = await repo.update(existing)
+    updated = await repo.update(site_id, data)
+    assert updated is not None  # existence checked above
     return _to_read(updated)
 
 
@@ -103,4 +102,4 @@ async def delete_site(
     existing = await repo.get_for_user(site_id, user_id)
     if existing is None:
         raise NotFoundException(ErrorCode.SITE_NOT_FOUND, f"Site {site_id} not found")
-    await repo.delete(existing)
+    await repo.delete(site_id)

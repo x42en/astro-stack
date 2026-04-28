@@ -60,13 +60,21 @@ class _FakeRepo:
         self.storage[site.id] = site
         return site
 
-    async def update(self, site: ObservationSite) -> ObservationSite:
+    async def update(
+        self, record_id: uuid.UUID, data: dict[str, Any]
+    ) -> ObservationSite | None:
+        site = self.storage.get(record_id)
+        if site is None:
+            return None
+        for key, value in data.items():
+            if hasattr(site, key):
+                setattr(site, key, value)
         site.updated_at = datetime.now(timezone.utc)
         self.storage[site.id] = site
         return site
 
-    async def delete(self, site: ObservationSite) -> None:
-        self.storage.pop(site.id, None)
+    async def delete(self, record_id: uuid.UUID) -> bool:
+        return self.storage.pop(record_id, None) is not None
 
 
 @pytest.fixture(autouse=True)

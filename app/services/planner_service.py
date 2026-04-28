@@ -183,6 +183,59 @@ class PlannerService:
         """
         return await asyncio.to_thread(self._compute_moon_phases, days)
 
+    async def forecast_for_object(
+        self,
+        latitude: float,
+        longitude: float,
+        elevation_m: float,
+        catalog_id: str,
+        *,
+        start_date: date,
+        days: int = 90,
+        min_altitude_deg: float = 30.0,
+        timezone_name: str = "UTC",
+    ) -> "ObjectForecast":
+        """Compute a multi-night observation forecast for one catalog object.
+
+        For each night in ``[start_date, start_date+days)`` we evaluate the
+        object's altitude/azimuth track during astronomical darkness and
+        derive a per-night score (purely geometric + lunar — no weather, so
+        this can be cached aggressively and computed months in advance).
+        """
+        from app.domain.visibility import ObjectForecast  # local import
+
+        obj = lookup_object(catalog_id)
+        if obj is None:
+            raise NotFoundException(
+                ErrorCode.PLAN_OBJECT_NOT_FOUND,
+                f"Unknown catalog id: {catalog_id}",
+            )
+        nights = await asyncio.to_thread(
+            self._compute_object_forecast,
+            latitude,
+            longitude,
+            elevation_m,
+            obj,
+            start_date,
+            days,
+            min_altitude_deg,
+            timezone_name,
+        )
+        return ObjectForecast(
+            catalog_id=obj.id,
+            name=obj.name,
+            type=obj.type,
+            constellation=obj.constellation,
+            ra_deg=obj.ra_deg,
+            dec_deg=obj.dec_deg,
+            magnitude=obj.magnitude,
+            site_latitude=latitude,
+            site_longitude=longitude,
+            site_elevation_m=elevation_m,
+            min_altitude_deg=min_altitude_deg,
+            nights=nights,
+        )
+
     def _compute_moon_phases(self, days: list[date]) -> list[float]:
         sf = _load_skyfield_modules()
         eph = _load_ephemeris(self._ephemeris_path)
@@ -432,3 +485,94 @@ class PlannerService:
                 with_curve=True,
             ).altitude_curve
         return top
+
+    def _compute_object_forecast(
+        self,
+        latitude: float,
+        longitude: float,
+        elevation_m: float,
+        obj: CatalogObject,
+        start_date: date,
+        days: int,
+        min_altitude_deg: float,
+        timezone_name: str,
+    ) -> list["NightlyForecastEntry"]:
+        from app.domain.visibility import NightlyForecastEntry  # local import
+
+        sf = _load_skyfield_modules()
+        eph = _load_ephemeris(self._ephemeris_path)
+        ts = sf["ts"]
+        Star = sf["Star"]
+        wgs84 = sf["wgs84"]
+        almanac = sf["almanac"]
+        earth = eph["earth"]
+        moon = eph["moon"]
+        topos = wgs84.latlon(latitude, longitude, elevation_m=elevation_m)
+        observer = earth + topos
+        target = Star(ra_hours=obj.ra_deg / 15.0, dec_degrees=obj.dec_deg)
+
+        out: list[NightlyForecastEntry] = []
+        sample_minutes = 30
+        for offset in range(days):
+            day = start_date + timedelta(days=offset)
+            window = self._compute_night_window(
+                latitude, longitude, elevation_m, day, timezone_name
+            )
+
+            # Sample object altitude across the dark window.
+            start = window.astronomical_twilight_end
+            end = window.astronomical_twilight_start
+            max_alt = -90.0
+            transit_t: Optional[datetime] = None
+            moon_sep = 180.0
+            samples_above = 0
+            total_samples = 0
+            sample = start
+            step = timedelta(minutes=sample_minutes)
+            while sample <= end:
+                t = ts.from_datetime(sample)
+                astrometric = observer.at(t).observe(target).apparent()
+                alt, _, _ = astrometric.altaz()
+                a = float(alt.degrees)
+                total_samples += 1
+                if a >= min_altitude_deg:
+                    samples_above += 1
+                if a > max_alt:
+                    max_alt = a
+                    transit_t = sample
+                    moon_apparent = observer.at(t).observe(moon).apparent()
+                    moon_sep = float(astrometric.separation_from(moon_apparent).degrees)
+                sample += step
+
+            hours_above = (samples_above * sample_minutes) / 60.0
+
+            # Score: combine geometric (max alt + duration above min) with
+            # lunar penalty (illumination + separation). No weather involved.
+            alt_w = max(0.0, min(1.0, max_alt / 90.0))
+            dur_w = 0.0 if total_samples == 0 else samples_above / total_samples
+            mag = obj.magnitude if obj.magnitude is not None else 8.0
+            mag_w = max(0.0, min(1.0, (10.0 - mag) / 10.0))
+            moon_pen = (
+                window.moon_illumination
+                * max(0.0, 1.0 - moon_sep / 90.0)
+                if window.moon_above_horizon_during_window
+                else window.moon_illumination * 0.2
+            )
+            geom = 0.5 * alt_w + 0.5 * dur_w
+            score = 100.0 * geom * (0.4 + 0.6 * mag_w) * max(0.2, 1.0 - moon_pen)
+            score = max(0.0, min(100.0, score))
+
+            out.append(
+                NightlyForecastEntry(
+                    date=day,
+                    max_altitude_deg=max_alt,
+                    hours_above_min_altitude=hours_above,
+                    transit_time=transit_t,
+                    moon_separation_deg=moon_sep,
+                    moon_illumination=window.moon_illumination,
+                    moon_above_horizon_during_window=window.moon_above_horizon_during_window,
+                    darkness_score=window.darkness_score,
+                    score=score,
+                )
+            )
+        return out

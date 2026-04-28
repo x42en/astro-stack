@@ -7,14 +7,15 @@ flow on the marketing landing page works without sign-in.
 from __future__ import annotations
 
 from datetime import date as date_type
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from datetime import timezone as timezone_module
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.domain.visibility import ObjectVisibility, ObservationWindow
+from app.domain.visibility import ObjectForecast, ObjectVisibility, ObservationWindow
 from app.infrastructure.weather.cache import (
     WeatherCache,
     geocode_cache_key,
@@ -85,7 +86,7 @@ class RecommendationBundle(BaseModel):
 
 
 def _validate_date(value: date_type) -> date_type:
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(timezone_module.utc).date()
     earliest = today - timedelta(days=1)
     latest = today + timedelta(days=15)
     if value < earliest or value > latest:
@@ -237,3 +238,48 @@ async def get_object_visibility(
     _validate_date(date)
     window = await planner.night_window(lat, lon, elevation, date, timezone)
     return await planner.visibility_for_object(lat, lon, elevation, window, catalog_id)
+
+
+@router.get("/object/{catalog_id}/forecast", response_model=ObjectForecast)
+async def get_object_forecast(
+    catalog_id: str,
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
+    elevation: float = Query(0.0, ge=-500.0, le=9000.0),
+    start_date: Optional[date_type] = Query(None, description="Defaults to today (UTC)."),
+    days: int = Query(90, ge=1, le=365),
+    min_altitude: float = Query(30.0, ge=0.0, le=89.0),
+    timezone: str = Query("UTC", max_length=64),
+    planner: PlannerService = Depends(get_planner),
+    cache: WeatherCache = Depends(get_cache),
+) -> ObjectForecast:
+    """Multi-night observability forecast for a single object.
+
+    Returns a per-night entry (max altitude, hours above ``min_altitude``,
+    moon context, score) for ``days`` consecutive nights starting at
+    ``start_date`` (defaults to today, UTC). The result is purely geometric
+    (no weather) and is cached for one day per (object, site, horizon).
+    """
+    if start_date is None:
+        start_date = datetime.now(timezone_module.utc).date()
+
+    cache_key = (
+        f"objfc:{catalog_id}:{lat:.4f}:{lon:.4f}:{elevation:.0f}:"
+        f"{start_date.isoformat()}:{days}:{min_altitude:.0f}"
+    )
+    cached = await cache.get_json(cache_key)
+    if cached is not None:
+        return ObjectForecast.model_validate(cached)
+
+    forecast = await planner.forecast_for_object(
+        lat,
+        lon,
+        elevation,
+        catalog_id,
+        start_date=start_date,
+        days=days,
+        min_altitude_deg=min_altitude,
+        timezone_name=timezone,
+    )
+    await cache.set_json(cache_key, forecast.model_dump(mode="json"), 24 * 3600)
+    return forecast
