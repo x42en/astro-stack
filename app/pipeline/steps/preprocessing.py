@@ -153,7 +153,11 @@ class PreprocessingStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "preprocessing.jpg"
-            await save_step_preview(stacked_path, preview_path)
+            await save_step_preview(
+                stacked_path,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/preprocessing"
         except Exception:  # noqa: BLE001
             logger.warning("preprocessing_preview_failed")

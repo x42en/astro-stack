@@ -147,7 +147,16 @@ class StretchColorStep(PipelineStep):
                     os.replace(str(pcc_out), str(siril_input))
                 logger.info("siril_pcc_done")
             except Exception as exc:  # noqa: BLE001
-                logger.warning("siril_pcc_failed", error=str(exc))
+                # Surface the underlying Siril console output so the actual
+                # cause (missing WCS, catalogue download error, low star
+                # count, ...) is visible in the worker logs instead of the
+                # opaque "status: error pcc" wrapper message.
+                siril_log = getattr(exc, "details", {}).get("siril_log", []) if hasattr(exc, "details") else []
+                logger.warning(
+                    "siril_pcc_failed",
+                    error=str(exc),
+                    siril_log=siril_log[-20:] if siril_log else [],
+                )
 
         commands = builder.build_postprocessing_commands()
 
@@ -203,7 +212,11 @@ class StretchColorStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "stretch_color.jpg"
-            await save_step_preview(stretched_path, preview_path)
+            await save_step_preview(
+                stretched_path,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/stretch_color"
         except Exception:  # noqa: BLE001
             logger.warning("stretch_color_preview_failed")

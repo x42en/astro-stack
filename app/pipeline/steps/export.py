@@ -112,7 +112,11 @@ class ExportStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "export.jpg"
-            await save_step_preview(source_fits, preview_path)
+            await save_step_preview(
+                source_fits,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/export"
         except Exception:  # noqa: BLE001
             logger.warning("export_preview_failed")

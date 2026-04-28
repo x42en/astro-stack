@@ -105,7 +105,11 @@ class GradientRemovalStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "gradient_removal.jpg"
-            await save_step_preview(output_path, preview_path)
+            await save_step_preview(
+                output_path,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/gradient_removal"
         except Exception:  # noqa: BLE001
             logger.warning("gradient_removal_preview_failed")

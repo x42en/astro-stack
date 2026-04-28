@@ -28,18 +28,32 @@ _MAX_DIM = 1200
 _JPEG_QUALITY = 85
 
 
-async def save_step_preview(fits_path: Path, output_path: Path) -> None:
+async def save_step_preview(
+    fits_path: Path,
+    output_path: Path,
+    *,
+    camera_defiltered: bool = True,
+) -> None:
     """Generate a JPEG preview from a FITS image, running in a thread pool.
 
     Args:
         fits_path: Source FITS file (any extension: .fit, .fits, .fts).
         output_path: Destination JPEG file path (parent dir is created automatically).
+        camera_defiltered: When ``False`` (stock DSLR) softens the per-channel
+            red BP in the display stretch so the residual Hα signal survives
+            sky-background subtraction.
     """
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(_EXECUTOR, _generate_preview, fits_path, output_path)
+    await loop.run_in_executor(
+        _EXECUTOR, _generate_preview, fits_path, output_path, camera_defiltered
+    )
 
 
-def _generate_preview(fits_path: Path, output_path: Path) -> None:
+def _generate_preview(
+    fits_path: Path,
+    output_path: Path,
+    camera_defiltered: bool = True,
+) -> None:
     """Synchronous FITS → JPEG conversion using the shared display stretch.
 
     Handles both 2-D (grayscale) and 3-D (C × H × W RGB) FITS arrays via
@@ -53,7 +67,7 @@ def _generate_preview(fits_path: Path, output_path: Path) -> None:
     from PIL import Image  # noqa: PLC0415
 
     try:
-        data = load_fits_display_rgb(fits_path)
+        data = load_fits_display_rgb(fits_path, camera_defiltered=camera_defiltered)
     except ValueError:
         logger.warning("preview_fits_empty", path=str(fits_path))
         return

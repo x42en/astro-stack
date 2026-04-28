@@ -121,7 +121,11 @@ class RawConversionStep(PipelineStep):
             if first_fits.exists():
                 try:
                     preview_path = context.output_dir / "previews" / "raw_conversion.jpg"
-                    await save_step_preview(first_fits, preview_path)
+                    await save_step_preview(
+                        first_fits,
+                        preview_path,
+                        camera_defiltered=bool(config.get("camera_defiltered", True)),
+                    )
                     preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/raw_conversion"
                 except Exception:  # noqa: BLE001
                     logger.warning("raw_conversion_preview_failed")
