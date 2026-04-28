@@ -502,7 +502,52 @@ async def get_step_preview(
     return FileResponse(str(preview_path), media_type="image/jpeg")
 
 
+class StepPreviewInfo(BaseModel):
+    """Single entry of the step-previews listing."""
+
+    step_name: str
+    display_name: str
+    has_preview: bool
+
+
+@router.get(
+    "/{session_id}/step-previews",
+    response_model=list[StepPreviewInfo],
+    summary="List per-step previews available for a session",
+    description=(
+        "Returns the full pipeline step plan with a ``has_preview`` flag "
+        "indicating whether the per-step JPEG has been produced yet. Used by "
+        "the UI to mark steps as visually browsable in completed sessions."
+    ),
+)
+async def list_step_previews(
+    session_id: uuid.UUID,
+    _user: Optional[dict] = Depends(get_current_user),
+) -> list[StepPreviewInfo]:
+    """Return availability of every pipeline step preview for ``session_id``.
+
+    Args:
+        session_id: Session UUID.
+        _user: Injected auth user.
+
+    Returns:
+        Ordered list of :class:`StepPreviewInfo` (one per planned step).
+    """
+    from app.pipeline.orchestrator import PIPELINE_STEP_PLAN  # noqa: PLC0415
+
+    file_store = FileStore()
+    return [
+        StepPreviewInfo(
+            step_name=name,
+            display_name=display,
+            has_preview=file_store.step_preview_path(session_id, name).exists(),
+        )
+        for name, display in PIPELINE_STEP_PLAN
+    ]
+
+
 # ── Light-frame preview ───────────────────────────────────────────────────────
+
 
 def _generate_light_preview(frame_path: Path, output_path: Path) -> None:
     """Generate a JPEG preview from a single light frame (sync, run in thread).

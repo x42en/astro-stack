@@ -444,12 +444,22 @@ def render_metadata_badge(
     pad_x = max(12, int(band_h * 0.4))
     pad_y = max(6, int(band_h * 0.18))
 
-    # Translucent band drawn on a separate layer for alpha-compositing.
-    band = Image.new("RGBA", (w, band_h), (8, 12, 22, 190))
+    # ── Background: vertical fade transparent → deep black ──
+    # The band is built from a per-row alpha gradient (0 at the top edge,
+    # ~235 at the bottom) so the image content fades smoothly into the
+    # watermark instead of being cut by a hard horizontal line.
+    band = Image.new("RGBA", (w, band_h), (0, 0, 0, 0))
+    gradient = Image.new("L", (1, band_h))
+    for y in range(band_h):
+        # Cubic ease-in keeps the top barely visible and ramps quickly so
+        # the text area stays well-contrasted.
+        t = y / max(band_h - 1, 1)
+        gradient.putpixel((0, y), int(235 * (t ** 1.6)))
+    gradient = gradient.resize((w, band_h))
+    fill = Image.new("RGBA", (w, band_h), (0, 0, 0, 255))
+    fill.putalpha(gradient)
+    band = Image.alpha_composite(band, fill)
     draw = ImageDraw.Draw(band)
-
-    # Top hairline separator for visual edge against the image.
-    draw.line([(0, 0), (w, 0)], fill=(255, 255, 255, 60), width=1)
 
     # Font sizes derived from band height.
     title_size = max(11, int(band_h * 0.30))
@@ -473,9 +483,9 @@ def render_metadata_badge(
     summary = (profile_summary or [])[:6]
     if summary:
         # Compute total width from right edge.
-        chip_pad_x = max(6, int(band_h * 0.12))
-        chip_pad_y = max(2, int(band_h * 0.05))
-        chip_gap = max(6, int(band_h * 0.10))
+        chip_pad_x = max(7, int(band_h * 0.14))
+        chip_pad_y = max(3, int(band_h * 0.07))
+        chip_gap = max(8, int(band_h * 0.12))
 
         # Pre-measure each chip.
         chips = []
@@ -494,17 +504,19 @@ def render_metadata_badge(
         for text, chip_w, chip_h in reversed(chips):
             x -= chip_w
             y0 = y_center - chip_h // 2
+            # Modern rounded-square chip (radius ≈ h/3, not full pill) with
+            # subtle 1px border that picks up the UI's aesthetic.
             draw.rounded_rectangle(
                 [(x, y0), (x + chip_w, y0 + chip_h)],
-                radius=max(3, chip_h // 2),
-                fill=(255, 255, 255, 22),
-                outline=(255, 255, 255, 45),
+                radius=max(4, chip_h // 3),
+                fill=(255, 255, 255, 14),
+                outline=(255, 255, 255, 55),
                 width=1,
             )
             draw.text(
                 (x + chip_pad_x, y0 + chip_pad_y - 1),
                 text,
-                fill=(220, 230, 245, 235),
+                fill=(225, 233, 245, 240),
                 font=f_val,
             )
             x -= chip_gap
