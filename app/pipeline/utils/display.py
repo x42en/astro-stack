@@ -139,8 +139,24 @@ def _stretch_array(
     When ``camera_defiltered=False`` the per-channel red black-point is
     further attenuated (multiplied by 0.55) so the faint residual Hα of a
     stock DSLR survives the sky-background subtraction.
+
+    Safeguard: if the input is already saturated (median > 0.95 — typically
+    the result of an over-aggressive Siril ``asinh`` on a low-surface-
+    brightness target), a soft compression is applied before the percentile
+    clip so the preview still shows usable structure instead of pure white.
     """
     arr = np.ascontiguousarray(arr, dtype=np.float32)
+
+    # ── Over-stretch safeguard ────────────────────────────────────────────
+    # When ``arr`` is mostly clipped to the white point (median > 0.95) the
+    # downstream percentile clip would compute lo ≈ hi ≈ 1.0 and fall back
+    # to the 1e-12 denom guard, producing a near-uniform image (typically
+    # all-black after the asinh).  Re-expand the upper range with a fourth
+    # power so the brightest highlights are pulled back into the displayable
+    # range while preserving relative ordering of pixel values.
+    finite = arr[np.isfinite(arr)]
+    if finite.size and float(np.median(finite)) > 0.95:
+        arr = np.power(arr, 4.0, dtype=np.float32)
 
     if arr.ndim == 3 and arr.shape[-1] == 3 and per_channel:
         # Per-channel black point — neutralises sky background cast.

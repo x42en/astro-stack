@@ -11,9 +11,24 @@ from app.infrastructure.queue.events_bus import EventBus
 from app.pipeline.adapters.siril_adapter import SirilAdapter, SirilEventType
 from app.pipeline.adapters.siril_script_builder import SirilScriptBuilder
 from app.pipeline.base_step import PipelineContext, PipelineStep, StepResult
+from app.pipeline.utils.object_type import ObjectType, resolve_object_type
 from app.pipeline.utils.preview import save_step_preview
 
 logger = get_logger(__name__)
+
+
+# Per-object-type override of the asinh stretch.  The defaults in
+# ``PRESET_STANDARD`` (asinh 150) are tuned for emission nebulae (Hα-rich,
+# high surface brightness).  Galaxies and clusters have a much lower mean
+# brightness and that aggressive stretch saturates the image to ~1.0,
+# producing an all-black preview after the percentile clip.  Drop the
+# strength selectively when the catalogue identifies the target.
+_ADAPTIVE_STRETCH_BY_TYPE: dict[ObjectType, float] = {
+    "galaxy": 50.0,
+    "cluster": 50.0,
+    "supernova": 60.0,
+    "planetary": 80.0,
+}
 
 
 class StretchColorStep(PipelineStep):
@@ -67,6 +82,50 @@ class StretchColorStep(PipelineStep):
             shutil.copy2(str(input_path), str(siril_input))
 
         profile_config = ProcessingProfileConfig(**config)
+
+        # ── Adaptive stretch override ────────────────────────────────────
+        # Lookup the bundled catalogue from the (free-form) target name and
+        # soften the asinh strength when the object is a galaxy / cluster /
+        # planetary.  Nebulae and unidentified targets keep the profile
+        # values verbatim.
+        object_name_hint = context.metadata.get("object_name_hint")
+        object_type = resolve_object_type(object_name_hint)
+        if object_type is not None:
+            context.metadata["object_type"] = object_type
+        adaptive_strength = (
+            _ADAPTIVE_STRETCH_BY_TYPE.get(object_type)
+            if object_type is not None
+            else None
+        )
+        if (
+            adaptive_strength is not None
+            and profile_config.stretch_method == "asinh"
+            and adaptive_strength < profile_config.stretch_strength
+        ):
+            original_strength = profile_config.stretch_strength
+            profile_config = profile_config.model_copy(
+                update={"stretch_strength": adaptive_strength}
+            )
+            context.metadata["adaptive_stretch_applied"] = {
+                "object_type": object_type,
+                "stretch_strength": adaptive_strength,
+                "original_stretch_strength": original_strength,
+            }
+            await self.event_bus.publish_job_event(
+                context.job_id,
+                LogEvent(
+                    job_id=context.job_id,
+                    session_id=context.session_id,
+                    level=LogLevel.INFO,
+                    source=LogSource.SYSTEM,
+                    message=(
+                        f"Adaptive stretch: {object_type} detected "
+                        f"({object_name_hint!r}) — asinh "
+                        f"{original_strength:.0f} → {adaptive_strength:.0f}"
+                    ),
+                ),
+            )
+
         builder = SirilScriptBuilder(
             config=profile_config,
             frames={},

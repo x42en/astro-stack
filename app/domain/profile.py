@@ -157,6 +157,11 @@ PRESET_QUICK = ProcessingProfileConfig(
     star_separation_enabled=False,
 )
 
+# ``stretch_strength=150`` is tuned for emission nebulae (Hα-rich, high
+# surface brightness). The ``stretch_color`` step adapts this value
+# automatically for galaxies / clusters via the bundled catalogue lookup —
+# see ``app/pipeline/steps/stretch_color.py`` and
+# ``app/pipeline/utils/object_type.py``.
 PRESET_STANDARD = ProcessingProfileConfig(
     rejection_algorithm="sigma",
     drizzle_enabled=False,
