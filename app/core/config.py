@@ -98,6 +98,24 @@ class Settings(BaseSettings):
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"
 
+    # ── Mock auth bridge (used only when auth_enabled is False) ──────────────
+    # Deterministic UUID namespace turning a mock username into a stable user id
+    # so the data persisted today can be remapped to a real user when auth lands.
+    mock_user_namespace: str = "f5b3b1a4-9b1e-4c41-9f3d-9a3a5d1c0001"
+    mock_user_header: str = "X-Mock-User"
+
+    # ── Planning & weather (open-meteo + skyfield) ───────────────────────────
+    openmeteo_forecast_url: str = "https://api.open-meteo.com/v1/forecast"
+    openmeteo_geocode_url: str = "https://geocoding-api.open-meteo.com/v1/reverse"
+    weather_cache_ttl_s: int = Field(default=3600, ge=60)
+    geocode_cache_ttl_s: int = Field(default=86400, ge=60)
+    # Skyfield ephemeris file (DE421, ~17 MB, bundled in image).
+    ephemeris_path: str = "/opt/ephemerides/de421.bsp"
+    # Default minimum altitude (degrees) above the horizon to consider an
+    # object "visible" during the planning night window.
+    planner_min_altitude_deg: float = Field(default=30.0, ge=5.0, le=85.0)
+    planner_max_results: int = Field(default=50, ge=1, le=200)
+
     @field_validator("gpu_devices")
     @classmethod
     def validate_gpu_devices(cls, value: str) -> str:

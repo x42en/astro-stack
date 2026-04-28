@@ -106,6 +106,7 @@ RUN pip install \
         "pydantic[email]" pydantic-settings email-validator \
         "python-jose[cryptography]" "passlib[bcrypt]" \
         httpx astropy astroquery rawpy numpy Pillow ExifRead \
+        skyfield timezonefinder \
         watchdog python-multipart aiofiles anyio structlog \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
@@ -196,8 +197,16 @@ FROM ai-tools AS final
 
 # Create non-root user for the application
 RUN useradd -m -s /bin/bash astro \
-    && mkdir -p /inbox /sessions /output /models \
-    && chown -R astro:astro /inbox /sessions /output /models
+    && mkdir -p /inbox /sessions /output /models /opt/ephemerides \
+    && chown -R astro:astro /inbox /sessions /output /models /opt/ephemerides
+
+# Skyfield ephemeris (DE421, ~17 MB) — bundled to keep planning offline.
+# Network failure is non-fatal at build time; planner_service will warn at boot.
+RUN wget -q --tries=3 --timeout=120 \
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de421.bsp" \
+        -O /opt/ephemerides/de421.bsp \
+    && chown astro:astro /opt/ephemerides/de421.bsp \
+    || echo "WARNING: DE421 ephemeris download failed — planner will be disabled until file is provided"
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH" \

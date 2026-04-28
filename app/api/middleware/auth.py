@@ -13,6 +13,7 @@ browsers cannot set ``Authorization`` headers on WebSocket connections.
 
 from __future__ import annotations
 
+import uuid
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -149,3 +150,112 @@ async def extract_ws_token(token: Optional[str]) -> Optional[str]:
         return str(payload.get("sub", "unknown"))
     except AuthException:
         return None
+
+
+def _mock_user_to_uuid(value: str) -> uuid.UUID:
+    """Map a free-text mock username to a deterministic UUID.
+
+    Uses :func:`uuid.uuid5` with the configured namespace so the same username
+    always resolves to the same persistence key. When real auth lands, a
+    one-shot data migration can rewrite owner_user_id columns by reapplying
+    this mapping to the legacy mock-user table.
+    """
+    settings = get_settings()
+    namespace = uuid.UUID(settings.mock_user_namespace)
+    return uuid.uuid5(namespace, value)
+
+
+async def get_user_id_or_mock(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> uuid.UUID:
+    """Return the caller's user UUID, supporting the mock-auth bridge.
+
+    Resolution order:
+        1. ``AUTH_ENABLED=true`` → validate the Bearer JWT, return ``UUID(sub)``.
+        2. ``AUTH_ENABLED=false`` and ``X-Mock-User`` header present →
+           ``uuid5(namespace, header_value)``.
+        3. Otherwise → 401.
+
+    Raises:
+        HTTPException: 401 when no usable identity is available.
+    """
+    settings = get_settings()
+
+    if settings.auth_enabled:
+        if credentials is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error_code": ErrorCode.AUTH_REQUIRED.value,
+                    "message": "Authentication is required. Provide a Bearer token.",
+                },
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        payload = _decode_token(credentials.credentials)
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error_code": ErrorCode.AUTH_TOKEN_INVALID.value,
+                    "message": "JWT 'sub' claim is missing.",
+                },
+            )
+        try:
+            return uuid.UUID(str(sub))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error_code": ErrorCode.AUTH_TOKEN_INVALID.value,
+                    "message": "JWT 'sub' claim is not a valid UUID.",
+                },
+            ) from exc
+
+    mock_value = request.headers.get(settings.mock_user_header)
+    if mock_value:
+        return _mock_user_to_uuid(mock_value.strip())
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "error_code": ErrorCode.AUTH_REQUIRED.value,
+            "message": (
+                "User identity required. Send a Bearer token (auth-enabled) "
+                f"or '{settings.mock_user_header}' header (mock auth)."
+            ),
+        },
+    )
+
+
+async def get_optional_user_id(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
+) -> Optional[uuid.UUID]:
+    """Like :func:`get_user_id_or_mock` but returns ``None`` when anonymous.
+
+    Useful for public endpoints that adapt their response if the caller
+    happens to be authenticated.
+    """
+    settings = get_settings()
+
+    if settings.auth_enabled:
+        if credentials is None:
+            return None
+        try:
+            payload = _decode_token(credentials.credentials)
+        except AuthException:
+            return None
+        sub = payload.get("sub")
+        if sub is None:
+            return None
+        try:
+            return uuid.UUID(str(sub))
+        except (TypeError, ValueError):
+            return None
+
+    mock_value = request.headers.get(settings.mock_user_header)
+    if mock_value:
+        return _mock_user_to_uuid(mock_value.strip())
+    return None

@@ -19,10 +19,10 @@ from pydantic import BaseModel
 
 from app.api.middleware.auth import get_current_user
 from app.core.logging import get_logger
-from app.infrastructure.catalog.messier import (
-    CatalogObject,
-    get_by_id,
-    search,
+from app.infrastructure.catalog.messier import CatalogObject
+from app.infrastructure.catalog.registry import (
+    lookup_object as get_by_id,
+    search_all as search,
 )
 
 logger = get_logger(__name__)
