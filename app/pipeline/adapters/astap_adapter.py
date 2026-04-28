@@ -167,6 +167,13 @@ class AstapAdapter:
 
         result = self._parse_result(fits_path, output_text)
         result["solved"] = True
+        # Promote the .wcs sidecar into the FITS header so downstream tools
+        # that don't read sidecars (GraXpert, then Siril ``pcc``) still see a
+        # plate-solved image.
+        try:
+            self._inject_wcs_into_fits(fits_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("astap_wcs_inject_failed", error=str(exc))
         return result
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -267,3 +274,53 @@ class AstapAdapter:
             dec=result["dec"],
         )
         return result
+
+    @staticmethod
+    def _inject_wcs_into_fits(fits_path: Path) -> None:
+        """Merge the ``.wcs`` sidecar produced by ASTAP into the FITS header.
+
+        ASTAP's ``-wcs`` flag writes a sidecar file in FITS-card text format
+        (one ``KEYWORD = VALUE / comment`` per line) instead of updating the
+        FITS header in place. Tools that only read the FITS header
+        (GraXpert, Siril's headless ``pcc`` command) therefore see a
+        non-platesolved image.
+
+        This helper reads the sidecar (if present) and copies its WCS-related
+        keywords into the FITS primary header.
+        """
+        from astropy.io import fits  # noqa: PLC0415
+
+        wcs_path = fits_path.with_suffix(".wcs")
+        if not wcs_path.exists():
+            return
+
+        try:
+            sidecar_hdr = fits.Header.fromtextfile(str(wcs_path))
+        except Exception:  # noqa: BLE001
+            # Some ASTAP versions terminate the sidecar with a stray END or
+            # non-FITS lines. Fall back to a tolerant manual parse.
+            sidecar_hdr = fits.Header()
+            for raw in wcs_path.read_text(errors="replace").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("END"):
+                    continue
+                # FITS cards are exactly 80 chars; tolerate shorter ones too.
+                try:
+                    card = fits.Card.fromstring(line.ljust(80))
+                    if card.keyword:
+                        sidecar_hdr.append(card, end=True)
+                except Exception:  # noqa: BLE001
+                    continue
+
+        if len(sidecar_hdr) == 0:
+            return
+
+        # Copy any keyword present in the sidecar — these are exactly the
+        # ones ASTAP considers part of the WCS solution.
+        with fits.open(str(fits_path), mode="update") as hdul:
+            tgt_hdr = hdul[0].header
+            for card in sidecar_hdr.cards:
+                if not card.keyword or card.keyword in ("HISTORY", "COMMENT", ""):
+                    continue
+                tgt_hdr[card.keyword] = (card.value, card.comment)
+            hdul.flush()
