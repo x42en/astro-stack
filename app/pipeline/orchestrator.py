@@ -681,6 +681,8 @@ class PipelineOrchestrator:
         from app.pipeline.utils.object_type import (  # noqa: PLC0415
             ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE,
             SKIP_GRADIENT_REMOVAL_TYPES,
+            SKIP_STAR_SEPARATION_TYPES,
+            SKIP_SUPER_RESOLUTION_TYPES,
             resolve_and_cache_object_type,
         )
 
@@ -718,6 +720,25 @@ class PipelineOrchestrator:
         ):
             applied["gradient_removal_enabled"] = {"from": True, "to": False}
             config_dict["gradient_removal_enabled"] = False
+
+        # 3. Skip Cosmic Clarity 2× super-resolution on object types where
+        #    the model amplifies clipped pixels into reconstruction
+        #    artefacts (bright nebula cores).
+        if (
+            object_type in SKIP_SUPER_RESOLUTION_TYPES
+            and config_dict.get("super_resolution_enabled", False)
+        ):
+            applied["super_resolution_enabled"] = {"from": True, "to": False}
+            config_dict["super_resolution_enabled"] = False
+
+        # 4. Skip star-separation on targets where it destroys the subject
+        #    (galaxies' HII regions, clusters where stars *are* the data).
+        if (
+            object_type in SKIP_STAR_SEPARATION_TYPES
+            and config_dict.get("star_separation_enabled", False)
+        ):
+            applied["star_separation_enabled"] = {"from": True, "to": False}
+            config_dict["star_separation_enabled"] = False
 
         if not applied:
             return

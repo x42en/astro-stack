@@ -37,13 +37,15 @@ class TestPresetConfigs:
         """Quality preset must enable drizzle integration."""
         assert PRESET_QUALITY.drizzle_enabled is True
 
-    def test_quality_preset_super_resolution_is_opt_in(self) -> None:
-        """Super-resolution is heavy; QUALITY no longer enables it by default."""
-        assert PRESET_QUALITY.super_resolution_enabled is False
+    def test_quality_preset_enables_super_resolution(self) -> None:
+        """QUALITY enables super-resolution; the object-type catalogue auto-skips
+        it on bright nebulae (M42-class) where it amplifies clipped cores."""
+        assert PRESET_QUALITY.super_resolution_enabled is True
 
-    def test_quality_preset_star_separation_is_opt_in(self) -> None:
-        """Star separation is heavy; QUALITY no longer enables it by default."""
-        assert PRESET_QUALITY.star_separation_enabled is False
+    def test_quality_preset_enables_star_separation(self) -> None:
+        """QUALITY enables star separation; the object-type catalogue auto-skips
+        it on galaxies / clusters where it destroys the subject."""
+        assert PRESET_QUALITY.star_separation_enabled is True
 
     def test_all_presets_default_to_defiltered_camera(self) -> None:
         """Defiltered cameras are the modern astrophoto norm \u2014 sensible default."""

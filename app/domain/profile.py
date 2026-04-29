@@ -273,11 +273,13 @@ PRESET_QUALITY = ProcessingProfileConfig(
     sharpen_stellar_amount=0.45,
     sharpen_nonstellar_amount=0.55,
     sharpen_radius=2,
-    # Super-resolution and star separation are now opt-in even on QUALITY:
-    # both are heavy AI passes that can introduce artefacts and double the
-    # pipeline runtime; they are toggled per-profile when really needed.
-    super_resolution_enabled=False,
-    star_separation_enabled=False,
+    # Super-resolution and star separation are ON for the full Quality
+    # experience.  Object-type adaptation auto-skips them on targets where
+    # they would damage the image (super-res off on bright nebulae, star
+    # separation off on galaxies / clusters); see
+    # ``app/pipeline/utils/object_type.py``.
+    super_resolution_enabled=True,
+    star_separation_enabled=True,
     star_separation_recombine=True,
 )
 

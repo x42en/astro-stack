@@ -106,19 +106,30 @@ def resolve_and_cache_object_type(context: "PipelineContext") -> ObjectType | No
 #
 # When the bundled catalogue identifies the target, the pipeline can soften
 # parameters that are tuned for emission nebulae (the default in
-# ``PRESET_STANDARD``).  Each override is applied **only when the new value
-# is strictly less than the profile value**, so a user-customised profile
-# that already lowers a setting is never overridden upward.
+# ``PRESET_STANDARD``).  Each numeric override is applied **only when the
+# new value is strictly less than the profile value**, so a user-customised
+# profile that already lowers a setting is never overridden upward.
 #
 # Galaxies: GraXpert is disabled because both AI and polynomial modes
 # sur-soustract on low-SNR diffuse targets (verified on M81).  The stretch
 # is also reduced to avoid clipping the mid-tones.
+#
+# Nebulae: stretch is capped at 150 — the Quality preset's 180 burns the
+# core on bright HII regions like M42 (verified visually, regression
+# investigation 2026-04-29).  Cosmic Clarity 2× super-resolution is
+# disabled because the model amplifies clipped pixels into reconstruction
+# artefacts on saturated cores.  Star-separation weights are widened to
+# preserve the wings: the default ``0.8 / 0.5`` recombine crushes the
+# faint outer voluptes once renormalised against a saturated core.
 ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, Any]] = {
     "galaxy": {
         "stretch_strength": 30.0,
         "denoise_strength": 0.40,
         "sharpen_stellar_amount": 0.20,
         "sharpen_nonstellar_amount": 0.25,
+    },
+    "nebula": {
+        "stretch_strength": 150.0,
     },
     "cluster": {
         "stretch_strength": 50.0,
@@ -137,3 +148,19 @@ ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, Any]] = {
 # Names listed here will skip the gradient_removal step entirely.  Tested
 # manually: on M81 both AI and polynomial modes produce all-NaN FITS.
 SKIP_GRADIENT_REMOVAL_TYPES: frozenset[ObjectType] = frozenset({"galaxy"})
+
+
+# ── Per-object-type AI super-resolution policy ───────────────────────────
+#
+# Cosmic Clarity 2× upsampling is destructive when the input has clipped
+# bright regions: the model hallucinates artefacts in place of the
+# saturated cores.  Disable on emission nebulae (M42-class burns).
+SKIP_SUPER_RESOLUTION_TYPES: frozenset[ObjectType] = frozenset({"nebula"})
+
+
+# ── Per-object-type star-separation policy ───────────────────────────────
+#
+# Star separation is meaningful when there is a separable nebula layer:
+# galaxies' HII regions get destroyed alongside the stellar layer, and
+# clusters *are* the stellar subject.  Skip both.
+SKIP_STAR_SEPARATION_TYPES: frozenset[ObjectType] = frozenset({"galaxy", "cluster"})
