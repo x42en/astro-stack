@@ -222,7 +222,15 @@ RUN set -eu; \
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH" \
-    QT_QPA_PLATFORM=offscreen
+    QT_QPA_PLATFORM=offscreen \
+    XDG_DATA_HOME=/models
+# XDG_DATA_HOME=/models — GraXpert (via appdirs.user_data_dir("GraXpert")) reads
+# its model bundles from $XDG_DATA_HOME/GraXpert/{bge,denoise,deconvolution-*}-ai-models.
+# Without this override appdirs falls back to /root/.local/share/GraXpert/ where
+# only models GraXpert downloaded itself at runtime would live — bge / deconv-*
+# bundles populated by scripts/init-models.sh into the /models volume would be
+# silently invisible, forcing GraXpert to re-download them on every fresh
+# container or (worse) skip the AI step entirely.
 # Note: PYTHONPATH must NOT be set to /app here — it would shadow the installed
 # alembic package with /app/alembic/ (our migrations dir) causing ImportError.
 # The editable install (pip install -e .) creates a .pth file in site-packages
