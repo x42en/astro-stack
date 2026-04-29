@@ -24,6 +24,7 @@ from app.api.v1.me_sites import router as me_sites_router
 from app.api.v1.planning import router as planning_router
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.sessions import router as sessions_router
+from app.api.v1.settings import router as settings_router
 from app.api.v1.ws.manager import WebSocketConnectionManager
 from app.api.v1.ws.router import router as ws_router
 from app.core.config import get_settings
@@ -175,6 +176,7 @@ def create_app() -> FastAPI:
     app.include_router(me_sites_router, prefix="/api/v1")
     app.include_router(me_followed_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
+    app.include_router(settings_router, prefix="/api/v1")
     app.include_router(ws_router)
 
     # ── Health check ──────────────────────────────────────────────────────────
