@@ -129,6 +129,14 @@ class ExportStep(PipelineStep):
                 "jpeg_path": str(jpeg_out),
                 "thumbnail_path": str(thumb_out),
                 **({"preview_url": preview_url} if preview_url else {}),
+                # Surface adaptive overrides applied at job start so the UI
+                # can render a "what the catalogue changed" panel after the
+                # job completes (see :class:`AdaptiveOverridesPanel`).
+                **(
+                    {"adaptive_overrides_applied": context.metadata["adaptive_overrides_applied"]}
+                    if isinstance(context.metadata.get("adaptive_overrides_applied"), dict)
+                    else {}
+                ),
             },
             message="Export complete.",
         )

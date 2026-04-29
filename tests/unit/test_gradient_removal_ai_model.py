@@ -22,6 +22,10 @@ from app.pipeline.steps.gradient_removal import _parse_ai_model
         ("deconv-obj-1.0.1", ("deconv-obj", "1.0.1")),
         ("deconv-stars-1.0.0", ("deconv-stars", "1.0.0")),
         ("deconv-both-1.0.1", ("deconv-both", "1.0.1")),
+        # ``"auto"`` is the catalogue-driven sentinel: the orchestrator
+        # normally resolves it before this step runs, but we keep a
+        # defensive fallback to BGE 1.0.1 in case it ever leaks down.
+        ("auto", ("bge", "1.0.1")),
     ],
 )
 def test_parse_ai_model_known_values(value: str, expected: tuple[str, str]) -> None:

@@ -2,7 +2,7 @@
   "kind": "astrostack-profile",
   "schema_version": 1,
   "name": "Preset — Quality",
-  "description": "Best-looking render with every safe option enabled. The pipeline auto-disables super-resolution on bright nebulae and star-separation on galaxies/clusters, and switches GraXpert from BGE to chained Object + Stars deconvolution on galaxies/clusters via the object-type catalogue.",
+  "description": "Full pipeline (drizzle 2x, AI denoise, super-resolution, star separation). AI selectors on auto so the catalogue picks GraXpert BGE for nebulae and chained deconvolution for galaxies / clusters.",
   "config": {
     "rejection_algorithm": "winsorized",
     "rejection_low": 3.0,
@@ -22,7 +22,7 @@
     "plate_solving_speed": "auto",
     "gradient_removal_enabled": true,
     "gradient_removal_method": "ai",
-    "gradient_removal_ai_model": "1.0.1",
+    "gradient_removal_ai_model": "auto",
     "gradient_removal_correction": "Subtraction",
     "gradient_removal_smoothing": 1.0,
     "gradient_removal_deconv_strength": 0.5,
@@ -45,10 +45,12 @@
     "sharpen_radius": 2,
     "super_resolution_enabled": true,
     "super_resolution_scale": 2,
+    "super_resolution_mode": "auto",
     "star_separation_enabled": true,
     "star_separation_recombine": true,
     "star_separation_nebula_weight": 0.8,
     "star_separation_star_weight": 0.5,
+    "star_separation_mode": "auto",
     "max_retries": 3
   }
 }

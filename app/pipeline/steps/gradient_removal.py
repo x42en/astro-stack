@@ -42,6 +42,12 @@ def _parse_ai_model(value: str) -> tuple[str, str]:
     """
     if not isinstance(value, str) or not value:
         return ("bge", "1.0.1")
+    # ``"auto"`` is the catalogue-driven sentinel resolved by the
+    # orchestrator's adaptive overrides phase.  If it ever leaks down to
+    # this step (e.g. unit tests, partial profile application) we fall
+    # back to BGE 1.0.1 — the historical default.
+    if value == "auto":
+        return ("bge", "1.0.1")
     if value.startswith(DECONV_BOTH_PREFIX):
         return ("deconv-both", value[len(DECONV_BOTH_PREFIX):] or "1.0.1")
     if value.startswith(DECONV_OBJ_PREFIX):

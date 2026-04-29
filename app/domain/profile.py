@@ -203,12 +203,26 @@ class ProcessingProfileConfig(SQLModel):
     # ── Super-resolution ──────────────────────────────────────────────────────
     super_resolution_enabled: bool = False
     super_resolution_scale: int = 2
+    # Tri-state policy controlling how the object-type catalogue interacts
+    # with ``super_resolution_enabled`` at job start:
+    #   * ``"auto"`` (default) — honour ``super_resolution_enabled`` from
+    #     the profile and, in addition, auto-skip on object types listed in
+    #     :data:`SKIP_SUPER_RESOLUTION_TYPES` (e.g. bright nebulae where the
+    #     model amplifies clipped cores).
+    #   * ``"on"`` — force the step ON regardless of the catalogue
+    #     (advanced override; can degrade the result).
+    #   * ``"off"`` — force the step OFF regardless of the catalogue.
+    super_resolution_mode: str = "auto"  # auto|on|off
 
     # ── Star separation ───────────────────────────────────────────────────────
     star_separation_enabled: bool = False
     star_separation_recombine: bool = True
     star_separation_nebula_weight: float = 0.8
     star_separation_star_weight: float = 0.5
+    # Same tri-state semantics as ``super_resolution_mode``; auto-skips on
+    # types listed in :data:`SKIP_STAR_SEPARATION_TYPES` (galaxies, clusters)
+    # when the mode is ``"auto"``.
+    star_separation_mode: str = "auto"  # auto|on|off
 
     # ── Retry ─────────────────────────────────────────────────────────────────
     max_retries: int = 3
@@ -221,6 +235,7 @@ PRESET_QUICK = ProcessingProfileConfig(
     drizzle_enabled=False,
     plate_solving_enabled=False,
     gradient_removal_enabled=False,
+    gradient_removal_ai_model="auto",
     stretch_method="auto",
     color_calibration_enabled=False,
     camera_defiltered=True,
@@ -230,7 +245,9 @@ PRESET_QUICK = ProcessingProfileConfig(
     denoise_strength=0.5,
     sharpen_enabled=False,
     super_resolution_enabled=False,
+    super_resolution_mode="auto",
     star_separation_enabled=False,
+    star_separation_mode="auto",
 )
 
 # ``stretch_strength=150`` is tuned for emission nebulae (Hα-rich, high
@@ -244,6 +261,7 @@ PRESET_STANDARD = ProcessingProfileConfig(
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
     gradient_removal_method="ai",
+    gradient_removal_ai_model="auto",
     stretch_method="asinh",
     stretch_strength=150.0,
     color_calibration_enabled=True,
@@ -262,7 +280,9 @@ PRESET_STANDARD = ProcessingProfileConfig(
     sharpen_stellar_amount=0.25,
     sharpen_nonstellar_amount=0.30,
     super_resolution_enabled=False,
+    super_resolution_mode="auto",
     star_separation_enabled=False,
+    star_separation_mode="auto",
 )
 
 PRESET_QUALITY = ProcessingProfileConfig(
@@ -273,6 +293,7 @@ PRESET_QUALITY = ProcessingProfileConfig(
     plate_solving_enabled=True,
     gradient_removal_enabled=True,
     gradient_removal_method="ai",
+    gradient_removal_ai_model="auto",
     stretch_method="asinh",
     # Reduced from 200 → 180: combined with the lower display highlight
     # rolloff (display.py) this preserves star cores without losing midtones.
@@ -298,7 +319,9 @@ PRESET_QUALITY = ProcessingProfileConfig(
     # separation off on galaxies / clusters); see
     # ``app/pipeline/utils/object_type.py``.
     super_resolution_enabled=True,
+    super_resolution_mode="auto",
     star_separation_enabled=True,
+    star_separation_mode="auto",
     star_separation_recombine=True,
 )
 

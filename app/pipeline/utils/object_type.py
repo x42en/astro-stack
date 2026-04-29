@@ -149,19 +149,21 @@ ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, Any]] = {
 # ── Per-object-type string-field overrides ───────────────────────────────
 #
 # String fields cannot be ranked "stricter / looser", so these overrides
-# are applied only when the current value is the **default** for that
-# field — a user that picked a non-default value is never overridden.
-# Each entry maps a field name to ``(default_sentinel, new_value)``.
+# are applied only when the current value matches the sentinel for that
+# field — typically the special ``"auto"`` placeholder which means
+# "let the catalogue choose for me".  A user that picked a concrete value
+# (e.g. ``"1.0.1"`` or ``"deconv-stars-1.0.1"``) is never overridden.
+# Each entry maps a field name to ``(sentinel, resolved_value)``.
 STRING_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, tuple[str, str]]] = {
     "galaxy": {
         # Replace BGE with chained object+stars deconvolution.  GraXpert
         # BGE destroys low-SNR galaxy disks; deconvolution instead lifts
         # the diffuse detail and tightens stars without subtracting signal.
-        "gradient_removal_ai_model": ("1.0.1", "deconv-both-1.0.1"),
+        "gradient_removal_ai_model": ("auto", "deconv-both-1.0.1"),
     },
     "cluster": {
         # Clusters benefit from PSF tightening on the dense star field.
-        "gradient_removal_ai_model": ("1.0.1", "deconv-both-1.0.1"),
+        "gradient_removal_ai_model": ("auto", "deconv-both-1.0.1"),
     },
 }
 

@@ -73,6 +73,28 @@ class TestPresetConfigs:
         with pytest.raises(ValueError, match="ADVANCED"):
             get_preset_config(ProfilePreset.ADVANCED)
 
+    def test_all_presets_default_gradient_removal_ai_model_to_auto(self) -> None:
+        """All built-in presets keep ``gradient_removal_ai_model="auto"`` so
+        the orchestrator's catalogue resolver picks the right GraXpert
+        model per object type at job start."""
+        assert PRESET_QUICK.gradient_removal_ai_model == "auto"
+        assert PRESET_STANDARD.gradient_removal_ai_model == "auto"
+        assert PRESET_QUALITY.gradient_removal_ai_model == "auto"
+
+    def test_all_presets_default_super_resolution_mode_to_auto(self) -> None:
+        """Tri-state ``super_resolution_mode`` defaults to ``"auto"`` so the
+        catalogue auto-skip on bright nebulae is honoured."""
+        assert PRESET_QUICK.super_resolution_mode == "auto"
+        assert PRESET_STANDARD.super_resolution_mode == "auto"
+        assert PRESET_QUALITY.super_resolution_mode == "auto"
+
+    def test_all_presets_default_star_separation_mode_to_auto(self) -> None:
+        """Tri-state ``star_separation_mode`` defaults to ``"auto"`` so the
+        catalogue auto-skip on galaxies / clusters is honoured."""
+        assert PRESET_QUICK.star_separation_mode == "auto"
+        assert PRESET_STANDARD.star_separation_mode == "auto"
+        assert PRESET_QUALITY.star_separation_mode == "auto"
+
 
 class TestProcessingProfileConfig:
     """Tests for ProcessingProfileConfig validation."""

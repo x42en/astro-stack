@@ -22,7 +22,7 @@
     "plate_solving_speed": "auto",
     "gradient_removal_enabled": false,
     "gradient_removal_method": "ai",
-    "gradient_removal_ai_model": "1.0.1",
+    "gradient_removal_ai_model": "auto",
     "gradient_removal_correction": "Subtraction",
     "gradient_removal_smoothing": 1.0,
     "gradient_removal_deconv_strength": 0.5,
@@ -45,10 +45,12 @@
     "sharpen_radius": 2,
     "super_resolution_enabled": false,
     "super_resolution_scale": 2,
+    "super_resolution_mode": "auto",
     "star_separation_enabled": false,
     "star_separation_recombine": true,
     "star_separation_nebula_weight": 0.8,
     "star_separation_star_weight": 0.5,
+    "star_separation_mode": "auto",
     "max_retries": 3
   }
 }
