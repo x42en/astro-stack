@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.middleware.auth import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_async_session
-from app.domain.job import ProfilePreset
+from app.domain.job import JobRead, ProfilePreset
 from app.domain.session import AstroSession, InputFormat, SessionRead, SessionStatus
 from app.infrastructure.storage.file_store import FileStore
 from app.services.job_service import JobService
@@ -261,6 +261,35 @@ async def get_session(
     service = SessionService(db)
     session = await service.get_or_404(session_id)
     return SessionRead.model_validate(session.model_dump())
+
+
+@router.get(
+    "/{session_id}/latest-job",
+    response_model=JobRead,
+    summary="Get the most recent job for a session",
+    description=(
+        "Returns the most recently created job for ``session_id`` regardless "
+        "of status (running, completed, cancelled, failed). Used by the UI "
+        "to recover the last render after a server restart or when the "
+        "client-side session→job mapping has been cleared."
+    ),
+)
+async def get_latest_job(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> JobRead:
+    """Return the most recent job for ``session_id`` (404 if none exists)."""
+    job_service = JobService(db)
+    # Ensure the session exists first so we surface a clean 404 path.
+    await SessionService(db).get_or_404(session_id)
+    latest = await job_service.get_latest_job_for_session(session_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No job has ever been started for session '{session_id}'.",
+        )
+    return latest
 
 
 @router.post(
