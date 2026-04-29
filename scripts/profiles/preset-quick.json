@@ -2,7 +2,7 @@
   "kind": "astrostack-profile",
   "schema_version": 1,
   "name": "Preset — Quick",
-  "description": "Fast turnaround for night-of triage: no plate-solve, no gradient removal, auto stretch, AI denoise only. Use it to validate framing/focus before queuing a longer run.",
+  "description": "Fastest acceptable result for laptop verification.",
   "config": {
     "rejection_algorithm": "sigma",
     "rejection_low": 3.0,
@@ -25,6 +25,9 @@
     "gradient_removal_ai_model": "1.0.1",
     "gradient_removal_correction": "Subtraction",
     "gradient_removal_smoothing": 1.0,
+    "gradient_removal_deconv_strength": 0.5,
+    "gradient_removal_deconv_psfsize": 0.3,
+    "gradient_removal_deconv_batch_size": 4,
     "stretch_method": "auto",
     "stretch_strength": 150.0,
     "color_calibration_enabled": false,

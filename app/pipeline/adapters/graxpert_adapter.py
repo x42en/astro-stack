@@ -138,6 +138,84 @@ class GraXpertAdapter:
             },
         )
 
+    async def deconvolve(
+        self,
+        input_path: Path,
+        output_path: Path,
+        *,
+        target: str,
+        ai_model: str,
+        strength: float = 0.5,
+        psfsize: float = 0.3,
+        batch_size: int = 4,
+        timeout: float = 900.0,
+    ) -> None:
+        """Run a GraXpert deconvolution pass (object-only or stellar-only).
+
+        Wraps ``graxpert -cli -cmd deconv-obj|deconv-stellar``.  The CLI
+        flags ``-strength`` (``[0.0, 1.0]``), ``-psfsize`` (``[0.0, 5.0]``)
+        and ``-batch_size`` (``[1, 32]``) are clamped here so a malformed
+        profile cannot abort the run.
+
+        Args:
+            input_path: Source FITS file.
+            output_path: Desired output FITS path.
+            target: ``"object"`` (uses ``deconv-obj`` and the
+                ``deconvolution-object-ai-models`` directory) or ``"stars"``
+                (uses ``deconv-stellar`` and the stellar models).
+            ai_model: Deconvolution model version (e.g. ``"1.0.1"``).
+            strength: Deconvolution strength in ``[0.0, 1.0]``.
+            psfsize: Estimated PSF radius (GraXpert default ``0.3``).
+            batch_size: Tiles processed in parallel ``[1, 32]``.
+            timeout: Maximum execution time in seconds.
+
+        Raises:
+            ValueError: If ``target`` is not ``"object"`` or ``"stars"``.
+            PipelineStepException: If GraXpert cannot be found, times out, or fails.
+        """
+        if target not in ("object", "stars"):
+            raise ValueError(
+                f"deconvolve target must be 'object' or 'stars', got {target!r}"
+            )
+        cmd_name = "deconv-obj" if target == "object" else "deconv-stellar"
+        ai_version = _normalize_ai_version(ai_model)
+        clamped_strength = _clamp(float(strength), 0.0, 1.0, name="strength")
+        clamped_psfsize = _clamp(float(psfsize), 0.0, 5.0, name="psfsize")
+        clamped_batch = int(_clamp(int(batch_size), 1, 32, name="batch_size"))
+
+        extra_flags = [
+            "-ai_version", ai_version,
+            "-strength", f"{clamped_strength:.3f}",
+            "-psfsize", f"{clamped_psfsize:.3f}",
+            "-batch_size", str(clamped_batch),
+        ]
+
+        output_stem = f"{input_path.stem}_GraXpertDeconv{target.capitalize()}"
+        cmd = self._build_cmd(
+            cmd_name=cmd_name,
+            input_path=input_path,
+            output_stem=output_stem,
+            extra_flags=extra_flags,
+        )
+
+        await self._run_command(
+            cmd=cmd,
+            input_path=input_path,
+            output_stem=output_stem,
+            output_path=output_path,
+            timeout=timeout,
+            error_code=ErrorCode.PIPE_GRAXPERT_DECONV_FAILED,
+            step_name=f"deconv_{target}",
+            log_event="graxpert_deconv",
+            log_extra={
+                "target": target,
+                "ai_version": ai_version,
+                "strength": clamped_strength,
+                "psfsize": clamped_psfsize,
+                "batch_size": clamped_batch,
+            },
+        )
+
     async def denoise(
         self,
         input_path: Path,

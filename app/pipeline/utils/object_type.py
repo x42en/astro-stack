@@ -110,9 +110,12 @@ def resolve_and_cache_object_type(context: "PipelineContext") -> ObjectType | No
 # new value is strictly less than the profile value**, so a user-customised
 # profile that already lowers a setting is never overridden upward.
 #
-# Galaxies: GraXpert is disabled because both AI and polynomial modes
-# sur-soustract on low-SNR diffuse targets (verified on M81).  The stretch
-# is also reduced to avoid clipping the mid-tones.
+# Galaxies: stretch is reduced to avoid clipping the mid-tones, and the
+# GraXpert AI selector is switched from background extraction to the
+# ``deconv-both`` chained pass (object → stars deconvolution).  BGE
+# sur-soustracts on low-SNR diffuse galaxy targets (verified on M81); the
+# deconvolution path instead recovers detail in the disk and tightens the
+# field stars without removing diffuse signal.
 #
 # Nebulae: stretch is capped at 150 — the Quality preset's 180 burns the
 # core on bright HII regions like M42 (verified visually, regression
@@ -143,11 +146,34 @@ ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, Any]] = {
 }
 
 
-# ── Per-object-type GraXpert policy ──────────────────────────────────────
+# ── Per-object-type string-field overrides ───────────────────────────────
 #
-# Names listed here will skip the gradient_removal step entirely.  Tested
-# manually: on M81 both AI and polynomial modes produce all-NaN FITS.
-SKIP_GRADIENT_REMOVAL_TYPES: frozenset[ObjectType] = frozenset({"galaxy"})
+# String fields cannot be ranked "stricter / looser", so these overrides
+# are applied only when the current value is the **default** for that
+# field — a user that picked a non-default value is never overridden.
+# Each entry maps a field name to ``(default_sentinel, new_value)``.
+STRING_OVERRIDES_BY_TYPE: dict[ObjectType, dict[str, tuple[str, str]]] = {
+    "galaxy": {
+        # Replace BGE with chained object+stars deconvolution.  GraXpert
+        # BGE destroys low-SNR galaxy disks; deconvolution instead lifts
+        # the diffuse detail and tightens stars without subtracting signal.
+        "gradient_removal_ai_model": ("1.0.1", "deconv-both-1.0.1"),
+    },
+    "cluster": {
+        # Clusters benefit from PSF tightening on the dense star field.
+        "gradient_removal_ai_model": ("1.0.1", "deconv-both-1.0.1"),
+    },
+}
+
+
+# ── Per-object-type GraXpert BGE policy (legacy hard-skip) ───────────────
+#
+# Kept as an extension point: object types listed here cause the
+# gradient_removal step to be skipped entirely (independent of the
+# AI-model selector).  Galaxies are no longer in this set — they now
+# default to the ``deconv-both`` chained deconvolution via
+# :data:`STRING_OVERRIDES_BY_TYPE`.
+SKIP_GRADIENT_REMOVAL_TYPES: frozenset[ObjectType] = frozenset()
 
 
 # ── Per-object-type AI super-resolution policy ───────────────────────────

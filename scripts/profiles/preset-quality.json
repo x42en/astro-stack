@@ -2,7 +2,7 @@
   "kind": "astrostack-profile",
   "schema_version": 1,
   "name": "Preset — Quality",
-  "description": "Best-looking render with every safe option enabled: drizzle x2, plate-solve + AI gradient removal, asinh stretch (180), Siril colour calibration (PCC opt-in), luminance-only AI denoise (0.65), AI sharpen (0.45/0.55), AI super-resolution 2x and star separation. The pipeline auto-disables super-resolution on bright nebulae (M42-class burns) and star-separation on galaxies/clusters via the object-type catalogue. Findstar override OFF (default Siril values preserve M42-class chrominance). camera_defiltered=true (modern norm).",
+  "description": "Best-looking render with every safe option enabled. The pipeline auto-disables super-resolution on bright nebulae and star-separation on galaxies/clusters, and switches GraXpert from BGE to chained Object + Stars deconvolution on galaxies/clusters via the object-type catalogue.",
   "config": {
     "rejection_algorithm": "winsorized",
     "rejection_low": 3.0,
@@ -25,6 +25,9 @@
     "gradient_removal_ai_model": "1.0.1",
     "gradient_removal_correction": "Subtraction",
     "gradient_removal_smoothing": 1.0,
+    "gradient_removal_deconv_strength": 0.5,
+    "gradient_removal_deconv_psfsize": 0.3,
+    "gradient_removal_deconv_batch_size": 4,
     "stretch_method": "asinh",
     "stretch_strength": 180.0,
     "color_calibration_enabled": true,

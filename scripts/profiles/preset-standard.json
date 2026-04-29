@@ -2,7 +2,7 @@
   "kind": "astrostack-profile",
   "schema_version": 1,
   "name": "Preset — Standard",
-  "description": "Balanced default: plate-solve + AI gradient removal + asinh stretch (150) + Siril colour calibration (without PCC) + luminance-only AI denoise + light AI sharpen. Findstar override OFF — keeps nebular chrominance intact (regression fix #findstar).",
+  "description": "Balanced default for routine processing on M42-class targets.",
   "config": {
     "rejection_algorithm": "sigma",
     "rejection_low": 3.0,
@@ -25,6 +25,9 @@
     "gradient_removal_ai_model": "1.0.1",
     "gradient_removal_correction": "Subtraction",
     "gradient_removal_smoothing": 1.0,
+    "gradient_removal_deconv_strength": 0.5,
+    "gradient_removal_deconv_psfsize": 0.3,
+    "gradient_removal_deconv_batch_size": 4,
     "stretch_method": "asinh",
     "stretch_strength": 150.0,
     "color_calibration_enabled": true,

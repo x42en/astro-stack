@@ -38,7 +38,19 @@ class ProcessingProfileConfig(SQLModel):
         plate_solving_speed: ASTAP speed mode.
         gradient_removal_enabled: Whether to run GraXpert.
         gradient_removal_method: ``ai`` or ``polynomial`` background model.
-        gradient_removal_ai_model: GraXpert model name.
+        gradient_removal_ai_model: GraXpert AI selector.  Acts as a combined
+            ``mode + version`` field so the existing UI dropdown can expose
+            every GraXpert AI capability through one control:
+
+            * ``"1.0.1"`` — Background Extraction (default, recommended for
+              nebulae).
+            * ``"deconv-obj-1.0.1"`` — Deconvolution on the object layer
+              only (recovers faint detail in nebula / galaxy disks).
+            * ``"deconv-stars-1.0.0"`` — Deconvolution on the stellar layer
+              only (tightens star PSFs).
+            * ``"deconv-both-1.0.1"`` — Object then stars deconvolution
+              chained.  Default for galaxies and clusters via the
+              object-type catalogue (``app/pipeline/utils/object_type.py``).
         stretch_method: Stretch algorithm applied after stacking.
         stretch_strength: Strength parameter for asinh stretch.
         color_calibration_enabled: Whether to run photometric color calibration.
@@ -126,6 +138,13 @@ class ProcessingProfileConfig(SQLModel):
     # locally-detailed model that follows sky variations without flattening
     # extended emission targets.  Reduce on rich nebula fields with stock DSLR.
     gradient_removal_smoothing: float = 1.0
+    # GraXpert deconvolution tunables — only honoured when
+    # ``gradient_removal_ai_model`` selects a ``deconv-*`` mode.  Defaults
+    # match the GraXpert CLI defaults so behaviour is predictable on any
+    # imported profile that omits them.
+    gradient_removal_deconv_strength: float = 0.5  # [0.0, 1.0]
+    gradient_removal_deconv_psfsize: float = 0.3   # [0.0, 5.0]
+    gradient_removal_deconv_batch_size: int = 4    # [1, 32]
 
     # ── Stretch & colour ─────────────────────────────────────────────
     stretch_method: str = "asinh"  # asinh|auto|linear

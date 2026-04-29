@@ -35,8 +35,11 @@ def test_cluster_planetary_supernova_only_soften_stretch() -> None:
     assert ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE["planetary"] == {"stretch_strength": 80.0}
 
 
-def test_skip_gradient_removal_types_only_contains_galaxy() -> None:
-    assert SKIP_GRADIENT_REMOVAL_TYPES == frozenset({"galaxy"})
+def test_skip_gradient_removal_types_is_empty() -> None:
+    """Galaxies are no longer hard-skipped — the catalogue routes them to
+    chained Object + Stars deconvolution via :data:`STRING_OVERRIDES_BY_TYPE`.
+    The legacy skip frozenset is kept as an empty extension point."""
+    assert SKIP_GRADIENT_REMOVAL_TYPES == frozenset()
 
 
 # ── resolve_and_cache_object_type ────────────────────────────────────────
@@ -109,6 +112,7 @@ async def test_galaxy_overrides_are_applied() -> None:
     ctx = _make_context()
     ctx.metadata["object_name_hint"] = "M81"
     config = _galaxy_config()
+    config["gradient_removal_ai_model"] = "1.0.1"
 
     await orch._apply_adaptive_overrides(ctx, config)
 
@@ -116,12 +120,15 @@ async def test_galaxy_overrides_are_applied() -> None:
     assert config["denoise_strength"] == 0.40
     assert config["sharpen_stellar_amount"] == 0.20
     assert config["sharpen_nonstellar_amount"] == 0.25
-    assert config["gradient_removal_enabled"] is False
+    # Galaxy is no longer hard-skipped — it is re-routed to chained
+    # Object + Stars deconvolution via STRING_OVERRIDES_BY_TYPE.
+    assert config["gradient_removal_enabled"] is True
+    assert config["gradient_removal_ai_model"] == "deconv-both-1.0.1"
 
     applied = ctx.metadata["adaptive_overrides_applied"]
     assert applied["object_type"] == "galaxy"
     assert "stretch_strength" in applied["fields"]
-    assert "gradient_removal_enabled" in applied["fields"]
+    assert "gradient_removal_ai_model" in applied["fields"]
 
 
 @pytest.mark.asyncio
@@ -183,7 +190,8 @@ async def test_stretch_override_skipped_when_method_not_asinh() -> None:
     assert config["stretch_strength"] == 150.0
     # Other galaxy overrides still apply.
     assert config["denoise_strength"] == 0.40
-    assert config["gradient_removal_enabled"] is False
+    # Galaxy step stays enabled — routed to deconv-both.
+    assert config["gradient_removal_enabled"] is True
 
 
 @pytest.mark.asyncio

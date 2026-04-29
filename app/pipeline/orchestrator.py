@@ -665,10 +665,12 @@ class PipelineOrchestrator:
 
         Looks up the bundled catalogue from ``object_name_hint`` /
         ``object_name``.  For known object types (galaxy, cluster, etc.) it
-        merges :data:`ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE` into the config
-        and, for galaxies specifically, disables the gradient_removal step
-        because both GraXpert AI and polynomial modes destroy the FITS
-        on low-SNR diffuse targets.
+        merges :data:`ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE` into the config,
+        switches the GraXpert AI selector to chained object+stars
+        deconvolution on galaxies / clusters via
+        :data:`STRING_OVERRIDES_BY_TYPE`, and disables AI steps that would
+        damage the subject (super-resolution on bright nebulae,
+        star-separation on galaxies / clusters).
 
         Each override is applied **only when the new value is strictly
         less than the current value** so user-customised profiles already
@@ -683,6 +685,7 @@ class PipelineOrchestrator:
             SKIP_GRADIENT_REMOVAL_TYPES,
             SKIP_STAR_SEPARATION_TYPES,
             SKIP_SUPER_RESOLUTION_TYPES,
+            STRING_OVERRIDES_BY_TYPE,
             resolve_and_cache_object_type,
         )
 
@@ -739,6 +742,18 @@ class PipelineOrchestrator:
         ):
             applied["star_separation_enabled"] = {"from": True, "to": False}
             config_dict["star_separation_enabled"] = False
+
+        # 5. String-field overrides (e.g. swap GraXpert BGE for chained
+        #    object+stars deconvolution on galaxies).  Applied only when
+        #    the current value matches the documented default sentinel so
+        #    a user-customised profile is never silently re-routed.
+        for field, (default_sentinel, new_value) in (
+            STRING_OVERRIDES_BY_TYPE.get(object_type, {}).items()
+        ):
+            current = config_dict.get(field)
+            if current == default_sentinel and current != new_value:
+                applied[field] = {"from": current, "to": new_value}
+                config_dict[field] = new_value
 
         if not applied:
             return

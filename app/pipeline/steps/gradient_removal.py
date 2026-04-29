@@ -13,6 +13,45 @@ from app.pipeline.utils.preview import save_step_preview
 logger = get_logger(__name__)
 
 
+# ── ai_model selector parsing ────────────────────────────────────────────
+#
+# The ``gradient_removal_ai_model`` profile field doubles as a mode +
+# version selector so the existing UI dropdown can expose all of GraXpert's
+# AI capabilities through a single field:
+#
+#   * ``"1.0.1"``                — Background Extraction (BGE) — default.
+#   * ``"deconv-obj-1.0.1"``     — Deconvolution (object-only).
+#   * ``"deconv-stars-1.0.0"``   — Deconvolution (stars-only).
+#   * ``"deconv-both-1.0.1"``    — Object then stars deconvolution chained
+#                                  (default for galaxies / clusters via the
+#                                  object-type catalogue).
+#
+# The bare semver form is preserved for backwards compatibility with
+# imported profiles created before deconvolution was wired in.
+DECONV_OBJ_PREFIX = "deconv-obj-"
+DECONV_STARS_PREFIX = "deconv-stars-"
+DECONV_BOTH_PREFIX = "deconv-both-"
+
+
+def _parse_ai_model(value: str) -> tuple[str, str]:
+    """Return ``(mode, version)`` for an ``ai_model`` selector value.
+
+    ``mode`` is one of ``"bge"``, ``"deconv-obj"``, ``"deconv-stars"``, or
+    ``"deconv-both"``.  Unknown / malformed values fall back to BGE 1.0.1
+    (logged at warning level).
+    """
+    if not isinstance(value, str) or not value:
+        return ("bge", "1.0.1")
+    if value.startswith(DECONV_BOTH_PREFIX):
+        return ("deconv-both", value[len(DECONV_BOTH_PREFIX):] or "1.0.1")
+    if value.startswith(DECONV_OBJ_PREFIX):
+        return ("deconv-obj", value[len(DECONV_OBJ_PREFIX):] or "1.0.1")
+    if value.startswith(DECONV_STARS_PREFIX):
+        return ("deconv-stars", value[len(DECONV_STARS_PREFIX):] or "1.0.0")
+    # Bare semver → BGE.
+    return ("bge", value)
+
+
 class GradientRemovalStep(PipelineStep):
     """Removes sky gradient and background from the stacked image using GraXpert."""
 
@@ -134,26 +173,74 @@ class GradientRemovalStep(PipelineStep):
 
         # Determine method: use AI if model is available, else fallback to polynomial
         requested_method = config.get("gradient_removal_method", "ai")
-        ai_model = config.get("gradient_removal_ai_model", "1.0.1")
+        ai_model_value = str(config.get("gradient_removal_ai_model", "1.0.1"))
+        mode, ai_version = _parse_ai_model(ai_model_value)
 
         method = requested_method
-        if requested_method == "ai" and not self._is_ai_model_available(ai_model):
+        if requested_method == "ai" and not self._is_ai_model_available(ai_version):
             logger.warning(
                 "graxpert_ai_model_not_found",
-                model=ai_model,
+                model=ai_version,
                 models_dir=str(self._adapter.models_path),
                 message="AI model not found, falling back to polynomial method",
             )
             method = "polynomial"
+            mode = "bge"
 
-        await self._adapter.remove_background(
-            input_path=context.stacked_fits_path,
-            output_path=output_path,
-            method=method,
-            ai_model=ai_model,
-            correction=str(config.get("gradient_removal_correction", "Subtraction")),
-            smoothing=float(config.get("gradient_removal_smoothing", 1.0)),
-        )
+        # Polynomial / BGE path → existing background-extraction adapter.
+        if method == "polynomial" or mode == "bge":
+            await self._adapter.remove_background(
+                input_path=context.stacked_fits_path,
+                output_path=output_path,
+                method=method,
+                ai_model=ai_version,
+                correction=str(config.get("gradient_removal_correction", "Subtraction")),
+                smoothing=float(config.get("gradient_removal_smoothing", 1.0)),
+            )
+            effective_method = method
+        else:
+            # Deconvolution path: object-only, stars-only, or both chained.
+            strength = float(config.get("gradient_removal_deconv_strength", 0.5))
+            psfsize = float(config.get("gradient_removal_deconv_psfsize", 0.3))
+            batch_size = int(config.get("gradient_removal_deconv_batch_size", 4))
+            if mode == "deconv-both":
+                # First pass: deconvolve the object (nebula / galaxy core).
+                intermediate = output_path.with_name("background_removed_obj.fits")
+                await self._adapter.deconvolve(
+                    input_path=context.stacked_fits_path,
+                    output_path=intermediate,
+                    target="object",
+                    ai_model=ai_version,
+                    strength=strength,
+                    psfsize=psfsize,
+                    batch_size=batch_size,
+                )
+                # Chain: stellar deconvolution on the object-deconvolved frame.
+                await self._adapter.deconvolve(
+                    input_path=intermediate,
+                    output_path=output_path,
+                    target="stars",
+                    ai_model="1.0.0",  # only version published by GraXpert at writing.
+                    strength=strength,
+                    psfsize=psfsize,
+                    batch_size=batch_size,
+                )
+                effective_method = "deconv-both"
+            else:
+                target = "object" if mode == "deconv-obj" else "stars"
+                # Stars-only model is published as 1.0.0; the object model
+                # we honour from the user-supplied selector.
+                target_version = ai_version if target == "object" else "1.0.0"
+                await self._adapter.deconvolve(
+                    input_path=context.stacked_fits_path,
+                    output_path=output_path,
+                    target=target,
+                    ai_model=target_version,
+                    strength=strength,
+                    psfsize=psfsize,
+                    batch_size=batch_size,
+                )
+                effective_method = mode
 
         context.background_removed_path = output_path
 
@@ -168,7 +255,7 @@ class GradientRemovalStep(PipelineStep):
         except Exception as exc:  # noqa: BLE001
             logger.warning("gradient_removal_wcs_copy_failed", error=str(exc))
 
-        logger.info("gradient_removal_done", output=str(output_path), method=method)
+        logger.info("gradient_removal_done", output=str(output_path), method=effective_method)
 
         # Generate a JPEG preview from the background-removed image. Non-critical.
         preview_url: str | None = None
@@ -187,8 +274,8 @@ class GradientRemovalStep(PipelineStep):
             success=True,
             metadata={
                 "background_removed_path": str(output_path),
-                "method": method,
+                "method": effective_method,
                 **({"preview_url": preview_url} if preview_url else {}),
             },
-            message=f"Background gradient removed using {method} method.",
+            message=f"Background gradient removed using {effective_method} method.",
         )

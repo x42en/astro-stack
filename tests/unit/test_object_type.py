@@ -9,6 +9,7 @@ from app.pipeline.utils.object_type import (
     SKIP_GRADIENT_REMOVAL_TYPES,
     SKIP_STAR_SEPARATION_TYPES,
     SKIP_SUPER_RESOLUTION_TYPES,
+    STRING_OVERRIDES_BY_TYPE,
     resolve_object_type,
 )
 
@@ -46,8 +47,24 @@ def test_nebula_caps_stretch_strength() -> None:
 
 
 def test_galaxy_skips_gradient_removal() -> None:
-    """GraXpert (AI + polynomial) destroys low-SNR diffuse targets — verified on M81."""
-    assert "galaxy" in SKIP_GRADIENT_REMOVAL_TYPES
+    """Galaxies are no longer hard-skipped — the catalogue switches them to
+    chained Object + Stars deconvolution via :data:`STRING_OVERRIDES_BY_TYPE`.
+    The legacy skip set must not list galaxy."""
+    assert "galaxy" not in SKIP_GRADIENT_REMOVAL_TYPES
+
+
+def test_galaxy_routes_to_chained_deconvolution() -> None:
+    """Galaxies default to ``deconv-both-1.0.1`` (object → stars chained)."""
+    sentinel, target = STRING_OVERRIDES_BY_TYPE["galaxy"]["gradient_removal_ai_model"]
+    assert sentinel == "1.0.1"
+    assert target == "deconv-both-1.0.1"
+
+
+def test_cluster_routes_to_chained_deconvolution() -> None:
+    """Clusters benefit from PSF tightening — same chained deconv as galaxies."""
+    sentinel, target = STRING_OVERRIDES_BY_TYPE["cluster"]["gradient_removal_ai_model"]
+    assert sentinel == "1.0.1"
+    assert target == "deconv-both-1.0.1"
 
 
 def test_nebula_skips_super_resolution() -> None:
