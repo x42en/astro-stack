@@ -128,6 +128,7 @@ class StretchColorStep(PipelineStep):
         # failure (missing catalogue, no internet, low star count) must NOT
         # break the post-processing chain.
         wcs_solved = bool(context.metadata.get("solved", False))
+        pcc_ran = False
         if wcs_solved and profile_config.photometric_calibration_enabled:
             # Diagnostic: inspect what's actually in the FITS Siril is about
             # to load — confirms whether the WCS chain (ASTAP → GraXpert
@@ -171,6 +172,7 @@ class StretchColorStep(PipelineStep):
                 pcc_out = context.work_dir / "output" / "for_stretch.fit"
                 if pcc_out.exists():
                     os.replace(str(pcc_out), str(siril_input))
+                pcc_ran = True
                 logger.info("siril_pcc_done")
             except Exception as exc:  # noqa: BLE001
                 # Surface the underlying Siril console output so the actual
@@ -184,7 +186,7 @@ class StretchColorStep(PipelineStep):
                     siril_log=siril_log[-20:] if siril_log else [],
                 )
 
-        commands = builder.build_postprocessing_commands()
+        commands = builder.build_postprocessing_commands(pcc_already_ran=pcc_ran)
 
         if not commands:
             context.stretched_fits_path = input_path
