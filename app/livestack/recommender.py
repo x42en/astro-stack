@@ -1,13 +1,23 @@
 """Deterministic exposure / colour-balance recommender.
 
 Inspects the running live-stack accumulator and emits actionable
-suggestions for the next acquisition (move ISO up/down, lengthen the
+suggestions for the next acquisition (raise/lower ISO, lengthen the
 exposure, adjust the camera white balance, refocus, ...).
 
 The implementation is intentionally rule-based: the goal is to give
-fast, reproducible feedback during an acquisition session.  A future
+fast, reproducible feedback during an acquisition session. A future
 ``OllamaRecommender`` can wrap this module and feed its output as
 context to a large-language model for richer narrative tips.
+
+Important — what the stats describe
+-----------------------------------
+The accumulator is the **linear** running mean of aligned, normalised
+frames in ``[0, 1]``. It is NOT the autostretched preview the user
+sees in the canvas. Astro frames are dominated by a dark sky
+background, so a healthy linear median sits very low (typically
+``0.005`` – ``0.05``); the autostretch only lifts that range to a
+display-friendly ``0.20`` – ``0.30`` for visualisation. All exposure
+thresholds below are calibrated for that linear regime.
 """
 
 from __future__ import annotations
@@ -32,17 +42,21 @@ Category = Literal["exposure", "iso", "white_balance", "focus", "general"]
 
 @dataclass(slots=True)
 class HistogramStats:
-    """Summary statistics of the current accumulator.
+    """Summary statistics of the current (linear) accumulator.
 
     Attributes:
         median_r: Median value of the red channel in [0, 1].
         median_g: Median value of the green channel in [0, 1].
         median_b: Median value of the blue channel in [0, 1].
-        clip_low_pct: Percentage of pixels clipped to 0 across all channels.
-        clip_high_pct: Percentage of pixels saturated to 1 across all channels.
-        last_fwhm: Last measured star FWHM in pixels (``None`` if unknown).
-        is_monochrome: True when no per-channel statistics are available
-            (the accumulator has shape ``(H, W)`` rather than ``(H, W, 3)``).
+        clip_low_pct: Percentage of pixels at the sensor floor across
+            all channels (linear values <= 1e-4).
+        clip_high_pct: Percentage of pixels saturated to 1 across all
+            channels.
+        last_fwhm: Last measured star FWHM in pixels (``None`` if
+            unknown).
+        is_monochrome: True when no per-channel statistics are
+            available (the accumulator has shape ``(H, W)`` rather
+            than ``(H, W, 3)``).
     """
 
     median_r: float
@@ -67,8 +81,8 @@ class Recommendation:
         severity: ``info`` / ``warn`` / ``critical``. The UI uses this
             to pick an icon and accent colour.
         category: High-level grouping for sorting / filtering.
-        message: One-sentence description of the issue, in French.
-        action: Concrete actionable step the user can take, in French.
+        message: One-sentence description of the issue.
+        action: Concrete actionable step the user can take.
     """
 
     severity: Severity
@@ -86,7 +100,8 @@ class RecommendationReport:
             derived from. Embedded so the client can render the same
             numbers next to the advice without an extra round-trip.
         recommendations: Ordered list of :class:`Recommendation`.
-            Empty when everything looks healthy.
+            Always contains at least one entry (a positive "all good"
+            note when no rule fires).
     """
 
     stats: HistogramStats
@@ -113,8 +128,6 @@ def compute_histogram_stats(
     """
     if image.ndim == 2:
         med = float(np.median(image))
-        # Clipping is rare in 32-bit float intermediates but we still
-        # report it so the rule engine can warn the user about it.
         clip_low = float(np.mean(image <= 1e-4) * 100.0)
         clip_high = float(np.mean(image >= 1.0 - 1e-4) * 100.0)
         return HistogramStats(
@@ -151,25 +164,32 @@ def compute_histogram_stats(
 # ── Rule engine ───────────────────────────────────────────────────────────────
 
 
-# Target median luminance for a properly exposed astro-frame stack.
-# Below ~0.10 we are under-exposed; above ~0.45 we start losing the
-# faintest signal to the noise floor and risk saturating bright stars.
-_TARGET_MEDIAN_MIN = 0.10
-_TARGET_MEDIAN_MAX = 0.45
+# Linear-stack thresholds for the median sky-background luminance.
+#
+# Astrophotography stacks are dominated by a dark sky background. After
+# normalisation a healthy median typically sits between ~0.005 and
+# ~0.05 (slightly higher under heavy light pollution). Below the floor
+# the signal is buried in the sensor read noise; above the ceiling we
+# are either over-exposing or fighting strong sky glow.
+_LINEAR_MEDIAN_FLOOR = 0.003   # below: under-exposed / read-noise limited
+_LINEAR_MEDIAN_LOW = 0.008     # below: shorter exposure is wasteful
+_LINEAR_MEDIAN_HIGH = 0.15     # above: sky glow / over-exposure suspected
+_LINEAR_MEDIAN_CRITICAL = 0.30 # above: heavily over-exposed or huge LP
 
-# Tolerance around 1.0 for the colour-channel ratios.  Astro CMOS sensors
-# typically have a green peak so we expect R/G and B/G slightly below 1.
-_WB_RATIO_WARN = 0.15  # 15 % deviation
-_WB_RATIO_CRITICAL = 0.35
+# Saturation thresholds measured on the linear stack.
+_HIGH_CLIP_WARN_PCT = 0.5
+_HIGH_CLIP_CRIT_PCT = 3.0
 
-# FWHM thresholds expressed in pixels.  Tuned for typical small-pixel
-# DSLR / cooled-CMOS setups; users with very long focal lengths may
-# want to raise these via configuration in a future iteration.
+# Tolerance around 1.0 for the colour-channel ratios. Most astro CMOS
+# sensors peak in green so we expect R/G and B/G slightly below 1.
+_WB_RATIO_WARN = 0.20      # 20 % deviation
+_WB_RATIO_CRITICAL = 0.40
+
+# FWHM thresholds in pixels, tuned for typical small-pixel
+# DSLR / cooled-CMOS setups. Long focal length users may want to raise
+# these via configuration in a future iteration.
 _FWHM_WARN = 4.0
 _FWHM_CRITICAL = 6.0
-
-_HIGH_CLIP_WARN_PCT = 1.0
-_LOW_CLIP_WARN_PCT = 5.0
 
 
 def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
@@ -184,68 +204,84 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
     luminance = stats.median_luminance
 
     # ── Exposure / ISO ──────────────────────────────────────────────────────
-    if luminance < _TARGET_MEDIAN_MIN:
-        gap = _TARGET_MEDIAN_MIN - luminance
-        severity: Severity = "warn" if gap < 0.05 else "critical"
+    if luminance < _LINEAR_MEDIAN_FLOOR:
         recs.append(
             Recommendation(
-                severity=severity,
+                severity="critical",
                 category="exposure",
                 message=(
-                    f"Image très sombre (médiane luminance {luminance:.2f}, "
-                    f"cible ≥ {_TARGET_MEDIAN_MIN:.2f})."
+                    f"Linear median {luminance:.4f} is below the read-noise "
+                    f"floor (~{_LINEAR_MEDIAN_FLOOR:.3f})."
                 ),
                 action=(
-                    "Allonger la pose unitaire d'environ +1 EV, ou monter "
-                    "les ISO d'un cran si la pose ne peut pas être rallongée."
+                    "Lengthen the sub-exposure (try +1 EV) or raise ISO so "
+                    "the sky background sits clearly above the sensor read "
+                    "noise."
                 ),
             )
         )
-    elif luminance > _TARGET_MEDIAN_MAX:
+    elif luminance < _LINEAR_MEDIAN_LOW:
+        recs.append(
+            Recommendation(
+                severity="info",
+                category="exposure",
+                message=(
+                    f"Linear median {luminance:.4f} is on the low side."
+                ),
+                action=(
+                    "If your tracking allows, slightly longer subs would "
+                    "improve signal-to-noise. Otherwise, this exposure is "
+                    "perfectly safe."
+                ),
+            )
+        )
+    elif luminance > _LINEAR_MEDIAN_CRITICAL:
+        recs.append(
+            Recommendation(
+                severity="critical",
+                category="exposure",
+                message=(
+                    f"Linear median {luminance:.3f} is very high — strong "
+                    "sky glow or severely over-exposed."
+                ),
+                action=(
+                    "Shorten the sub-exposure or lower ISO; check for "
+                    "nearby light pollution and consider a light-pollution "
+                    "filter."
+                ),
+            )
+        )
+    elif luminance > _LINEAR_MEDIAN_HIGH:
         recs.append(
             Recommendation(
                 severity="warn",
                 category="exposure",
                 message=(
-                    f"Image très lumineuse (médiane luminance {luminance:.2f}, "
-                    f"cible ≤ {_TARGET_MEDIAN_MAX:.2f})."
+                    f"Linear median {luminance:.3f} suggests heavy sky "
+                    "background (light pollution or too much EV)."
                 ),
                 action=(
-                    "Réduire la pose unitaire d'environ -1 EV ou baisser les "
-                    "ISO pour préserver les hautes lumières et l'étoile centrale."
+                    "Try shortening the sub-exposure by ~1 EV, or use a "
+                    "narrowband / LP filter to reclaim dynamic range for "
+                    "the target."
                 ),
             )
         )
 
     if stats.clip_high_pct >= _HIGH_CLIP_WARN_PCT:
+        is_critical = stats.clip_high_pct >= _HIGH_CLIP_CRIT_PCT
         recs.append(
             Recommendation(
-                severity="critical" if stats.clip_high_pct >= 5 else "warn",
+                severity="critical" if is_critical else "warn",
                 category="exposure",
                 message=(
-                    f"{stats.clip_high_pct:.1f} % de pixels saturés."
+                    f"{stats.clip_high_pct:.1f}% of pixels are saturated."
                 ),
                 action=(
-                    "Réduire la pose ou les ISO ; envisager de poser plus court "
-                    "et de stacker davantage de frames pour préserver les étoiles brillantes."
-                ),
-            )
-        )
-
-    if (
-        stats.clip_low_pct >= _LOW_CLIP_WARN_PCT
-        and luminance < _TARGET_MEDIAN_MIN
-    ):
-        recs.append(
-            Recommendation(
-                severity="info",
-                category="iso",
-                message=(
-                    f"{stats.clip_low_pct:.1f} % de pixels au plancher (signal noyé dans le bruit)."
-                ),
-                action=(
-                    "Préférer une pose plus longue à une montée d'ISO : la dynamique "
-                    "se préserve mieux à ISO modéré et le signal sortira du bruit."
+                    "Shorten the sub-exposure or lower ISO. A few clipped "
+                    "star cores are unavoidable, but more than a fraction "
+                    "of a percent costs you star colours and bright nebula "
+                    "detail."
                 ),
             )
         )
@@ -256,10 +292,7 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
         ratio_r = stats.median_r / green
         ratio_b = stats.median_b / green
 
-        for label, ratio, dominant in (
-            ("rouge", ratio_r, "rouge"),
-            ("bleu", ratio_b, "bleu"),
-        ):
+        for label, ratio in (("red", ratio_r), ("blue", ratio_b)):
             deviation = abs(ratio - 1.0)
             if deviation >= _WB_RATIO_CRITICAL:
                 recs.append(
@@ -267,14 +300,14 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
                         severity="warn",
                         category="white_balance",
                         message=(
-                            f"Forte dominante {dominant} (ratio {label}/vert = "
+                            f"Strong {label} cast ({label}/green ratio = "
                             f"{ratio:.2f})."
                         ),
                         action=(
-                            "Vérifier la balance des blancs caméra (mode "
-                            "« Lumière du jour » ou « Auto »). Un slider RGB "
-                            "compense visuellement, mais la correction matérielle "
-                            "reste préférable pour préserver la dynamique."
+                            "Check the camera white balance (Daylight or "
+                            "Auto are usually safest). The RGB sliders in "
+                            "the panel below are a visual aid only — a "
+                            "hardware fix preserves more dynamic range."
                         ),
                     )
                 )
@@ -284,12 +317,12 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
                         severity="info",
                         category="white_balance",
                         message=(
-                            f"Légère dominante {dominant} (ratio {label}/vert = "
+                            f"Mild {label} cast ({label}/green ratio = "
                             f"{ratio:.2f})."
                         ),
                         action=(
-                            f"Ajuster le gain {label} dans le panneau « RGB balance » "
-                            "ou affiner la balance des blancs caméra."
+                            f"Trim the {label} gain in the RGB balance "
+                            "panel or fine-tune the camera white balance."
                         ),
                     )
                 )
@@ -302,11 +335,13 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
                     severity="critical",
                     category="focus",
                     message=(
-                        f"FWHM dégradée ({stats.last_fwhm:.1f} px) — étoiles très molles."
+                        f"FWHM is degraded ({stats.last_fwhm:.1f} px) — "
+                        "stars are very soft."
                     ),
                     action=(
-                        "Refaire la mise au point (masque de Bahtinov, autofocus) ou "
-                        "vérifier le suivi. Frames à écarter au stacking si la dérive persiste."
+                        "Refocus (Bahtinov mask, autofocus) or check the "
+                        "mount tracking. Discard frames with persistent "
+                        "drift before the next stack."
                     ),
                 )
             )
@@ -316,11 +351,12 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
                     severity="warn",
                     category="focus",
                     message=(
-                        f"FWHM élevée ({stats.last_fwhm:.1f} px) — perte de piqué."
+                        f"FWHM is on the high side ({stats.last_fwhm:.1f} "
+                        "px) — resolution is suffering."
                     ),
                     action=(
-                        "Contrôler la mise au point ; la dérive thermique peut justifier "
-                        "un ré-ajustement toutes les 30 minutes."
+                        "Verify focus; thermal drift can warrant a "
+                        "refocus every 30 minutes or so."
                     ),
                 )
             )
@@ -330,12 +366,14 @@ def compute_recommendations(stats: HistogramStats) -> RecommendationReport:
             Recommendation(
                 severity="info",
                 category="general",
-                message="Acquisition saine — médiane et balance des blancs dans les clous.",
-                action="Continuer ainsi ; surveiller la dérive de FWHM dans le temps.",
+                message=(
+                    "Acquisition looks healthy — exposure, balance and "
+                    "focus are all in range."
+                ),
+                action="Keep going, and watch FWHM for thermal drift over time.",
             )
         )
 
-    # Critical first, then warn, then info.
     severity_rank = {"critical": 0, "warn": 1, "info": 2}
     recs.sort(key=lambda r: severity_rank[r.severity])
 
