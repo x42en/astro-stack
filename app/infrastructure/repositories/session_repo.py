@@ -12,7 +12,7 @@ from typing import Optional
 from sqlalchemy import func, or_
 from sqlmodel import select
 
-from app.domain.session import AstroSession, SessionStatus
+from app.domain.session import AstroSession, SessionMode, SessionStatus
 from app.infrastructure.repositories.base import BaseRepository
 
 
@@ -38,11 +38,17 @@ class SessionRepository(BaseRepository[AstroSession]):
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
-    async def count_all(self, search: str | None = None) -> int:
+    async def count_all(
+        self,
+        search: str | None = None,
+        owner_id: uuid.UUID | None = None,
+    ) -> int:
         """Return the total count of all sessions, optionally filtered by name search.
 
         Args:
             search: Optional name substring filter (case-insensitive).
+            owner_id: Optional owner UUID; when provided only sessions
+                with that exact owner are counted.
 
         Returns:
             Total matching session count.
@@ -56,15 +62,23 @@ class SessionRepository(BaseRepository[AstroSession]):
                     AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
                 )
             )
+        if owner_id is not None:
+            stmt = stmt.where(AstroSession.owner_id == owner_id)
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
-    async def count_by_status(self, status: SessionStatus, search: str | None = None) -> int:
+    async def count_by_status(
+        self,
+        status: SessionStatus,
+        search: str | None = None,
+        owner_id: uuid.UUID | None = None,
+    ) -> int:
         """Return the count of sessions with a given status.
 
         Args:
             status: The lifecycle status to filter by.
             search: Optional name substring filter (case-insensitive).
+            owner_id: Optional owner UUID filter.
 
         Returns:
             Total matching session count.
@@ -80,6 +94,8 @@ class SessionRepository(BaseRepository[AstroSession]):
                     AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
                 )
             )
+        if owner_id is not None:
+            stmt = stmt.where(AstroSession.owner_id == owner_id)
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
@@ -89,6 +105,7 @@ class SessionRepository(BaseRepository[AstroSession]):
         offset: int = 0,
         limit: int = 100,
         search: str | None = None,
+        owner_id: uuid.UUID | None = None,
     ) -> list[AstroSession]:
         """Retrieve sessions filtered by lifecycle status.
 
@@ -110,6 +127,8 @@ class SessionRepository(BaseRepository[AstroSession]):
                     AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
                 )
             )
+        if owner_id is not None:
+            stmt = stmt.where(AstroSession.owner_id == owner_id)
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -119,6 +138,7 @@ class SessionRepository(BaseRepository[AstroSession]):
         offset: int = 0,
         limit: int = 100,
         search: str | None = None,
+        owner_id: uuid.UUID | None = None,
     ) -> list[AstroSession]:
         """Retrieve all sessions ordered by creation time (newest first).
 
@@ -139,9 +159,37 @@ class SessionRepository(BaseRepository[AstroSession]):
                     AstroSession.object_name.ilike(pattern),  # type: ignore[union-attr]
                 )
             )
+        if owner_id is not None:
+            stmt = stmt.where(AstroSession.owner_id == owner_id)
         stmt = stmt.order_by(AstroSession.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def find_active_live_for_owner(
+        self,
+        owner_id: uuid.UUID,
+    ) -> Optional[AstroSession]:
+        """Return the most recent non-terminal live session for an owner.
+
+        "Active" excludes ``COMPLETED``, ``FAILED`` and ``CANCELLED`` so
+        the UI can offer a "Resume" affordance only when the user truly
+        has an in-progress session to come back to.
+        """
+        terminal = (
+            SessionStatus.COMPLETED.value,
+            SessionStatus.FAILED.value,
+            SessionStatus.CANCELLED.value,
+        )
+        stmt = (
+            select(AstroSession)
+            .where(AstroSession.owner_id == owner_id)
+            .where(AstroSession.mode == SessionMode.LIVE.value)
+            .where(~AstroSession.status.in_(terminal))  # type: ignore[union-attr]
+            .order_by(AstroSession.created_at.desc())  # type: ignore[attr-defined]
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
 
     async def update_status(
         self,

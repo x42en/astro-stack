@@ -113,6 +113,7 @@ class AstroSession(SQLModel, table=True):
     frame_count_darks: int = Field(default=0, ge=0)
     frame_count_flats: int = Field(default=0, ge=0)
     frame_count_bias: int = Field(default=0, ge=0)
+    frame_count_dark_flats: int = Field(default=0, ge=0)
 
     # Ingestion mode (batch upload vs. live acquisition with incremental
     # stacking).  See :class:`SessionMode` for semantics.
@@ -125,6 +126,14 @@ class AstroSession(SQLModel, table=True):
     # ``frame_count_lights`` so we can distinguish frames already merged in
     # the running stack from frames present on disk but not yet processed.
     live_frame_count: int = Field(default=0, ge=0)
+
+    # Owner of the session (UUID resolved from the JWT ``sub`` claim or from
+    # the ``X-Mock-User`` header in mock-auth mode).  Nullable so sessions
+    # created before the ownership migration keep working unchanged.
+    owner_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(PG_UUID(as_uuid=True), nullable=True, index=True),
+    )
 
     object_name: Optional[str] = Field(default=None, max_length=255)
     ra: Optional[float] = Field(default=None)
@@ -238,10 +247,12 @@ class SessionRead(SQLModel):
     input_format: Optional[InputFormat]
     mode: SessionMode = SessionMode.BATCH
     live_frame_count: int = 0
+    owner_id: Optional[uuid.UUID] = None
     frame_count_lights: int
     frame_count_darks: int
     frame_count_flats: int
     frame_count_bias: int
+    frame_count_dark_flats: int = 0
     object_name: Optional[str]
     ra: Optional[float]
     dec: Optional[float]

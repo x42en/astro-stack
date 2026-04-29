@@ -18,12 +18,24 @@ responsive.
 from __future__ import annotations
 
 from app.livestack.autostretch import StretchMethod, apply_mtf_autostretch
+from app.livestack.recommender import (
+    HistogramStats,
+    Recommendation,
+    RecommendationReport,
+    compute_histogram_stats,
+    compute_recommendations,
+)
 from app.livestack.service import LiveStackService
 from app.livestack.state import LiveStackState
 
 __all__ = [
+    "HistogramStats",
     "LiveStackService",
     "LiveStackState",
+    "Recommendation",
+    "RecommendationReport",
     "StretchMethod",
     "apply_mtf_autostretch",
+    "compute_histogram_stats",
+    "compute_recommendations",
 ]

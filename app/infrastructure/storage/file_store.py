@@ -51,6 +51,9 @@ RAW_DSLR_EXTENSIONS: frozenset[str] = frozenset(
 # Frame type detection by directory name (case-insensitive)
 DARK_DIR_NAMES: frozenset[str] = frozenset({"darks", "dark"})
 FLAT_DIR_NAMES: frozenset[str] = frozenset({"flats", "flat"})
+DARK_FLAT_DIR_NAMES: frozenset[str] = frozenset(
+    {"dark_flats", "darkflats", "dark-flats", "dark_flat", "darkflat"}
+)
 BIAS_DIR_NAMES: frozenset[str] = frozenset({"bias", "biases", "offset", "offsets"})
 LIGHT_DIR_NAMES: frozenset[str] = frozenset({"lights", "light", "raws", "raw", "subs", "frames"})
 
@@ -222,6 +225,7 @@ class FileStore:
             "lights": [],
             "darks": [],
             "flats": [],
+            "dark_flats": [],
             "bias": [],
         }
 
@@ -237,7 +241,10 @@ class FileStore:
                 continue
 
             dir_lower = child.name.lower()
-            if dir_lower in DARK_DIR_NAMES:
+            if dir_lower in DARK_FLAT_DIR_NAMES:
+                # Match dark-flats BEFORE darks because the names overlap.
+                result["dark_flats"].extend(_collect_images(child))
+            elif dir_lower in DARK_DIR_NAMES:
                 result["darks"].extend(_collect_images(child))
             elif dir_lower in FLAT_DIR_NAMES:
                 result["flats"].extend(_collect_images(child))
@@ -259,6 +266,7 @@ class FileStore:
             lights=len(result["lights"]),
             darks=len(result["darks"]),
             flats=len(result["flats"]),
+            dark_flats=len(result["dark_flats"]),
             bias=len(result["bias"]),
         )
         return result
