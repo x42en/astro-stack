@@ -106,16 +106,12 @@ class GraXpertAdapter:
         extra_flags: list[str] = []
         if method == "ai":
             extra_flags = ["-ai_version", ai_version]
-        # ── DIAGNOSTIC: temporarily revert to the 21194e2 (2026-04-27 17:42)
-        # invocation that produced the orion2 reference output.  ``-correction``
-        # and ``-smoothing`` were added later; commented out to test whether
-        # GraXpert's defaults preserve more nebular chrominance than our
-        # explicit Subtraction/1.0 settings.  Re-enable once the colour
-        # divergence with orion2 is understood.
-        # extra_flags += [
-        #     "-correction", correction_value,
-        #     "-smoothing", f"{clamped_smoothing:.3f}",
-        # ]
+        # ``-correction`` and ``-smoothing`` are valid for both AI and polynomial
+        # background-extraction modes; pass them unconditionally.
+        extra_flags += [
+            "-correction", correction_value,
+            "-smoothing", f"{clamped_smoothing:.3f}",
+        ]
 
         output_stem = f"{input_path.stem}_GraXpertBGE"
         cmd = self._build_cmd(

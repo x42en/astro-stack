@@ -82,6 +82,25 @@ class ProcessingProfileConfig(SQLModel):
     drizzle_pixfrac: float = 0.7
     debayer_pattern: str = "auto"  # auto|RGGB|BGGR|GRBG|GBRG
 
+    # ── Star detection (Siril ``findstar``) ───────────────────────────────────
+    # ``findstar`` powers Siril's ``register`` (frame alignment before stack)
+    # and is configured session-wide via ``setfindstar``.  When enabled, our
+    # script emits ``setfindstar reset`` then applies the values below before
+    # the registration pass.
+    #
+    # **Stacking-chrominance impact**: relaxed values (low sigma, low
+    # roundness, large radius) cause Siril to accept non-stellar structures
+    # (nebula contours, hot pixels) as alignment anchors.  The resulting
+    # micro-jitter between frames smears fine chrominance details (visible
+    # on bright nebula cores like M42).  Defaults preserve colour fidelity;
+    # only relax for genuinely faint/wide-field rigs that fail to find
+    # enough true stars to align.
+    findstar_override_enabled: bool = False
+    findstar_radius: int = 10        # Siril default
+    findstar_sigma: float = 1.0      # Siril default
+    findstar_roundness: float = 0.5  # Siril default
+    findstar_relax: bool = False     # Siril default
+
     # ── Plate solving ─────────────────────────────────────────────────────────
     plate_solving_enabled: bool = True
     plate_solving_radius_deg: float = 180.0

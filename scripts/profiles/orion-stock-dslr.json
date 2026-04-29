@@ -12,7 +12,7 @@
     "drizzle_scale": 2,
     "drizzle_pixfrac": 0.7,
     "debayer_pattern": "auto",
-    "plate_solving_enabled": false,
+    "plate_solving_enabled": true,
     "plate_solving_radius_deg": 30.0,
     "plate_solving_speed": "auto",
     "gradient_removal_enabled": true,

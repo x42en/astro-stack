@@ -227,16 +227,23 @@ class SirilScriptBuilder:
 
         # Registration — two-step approach compatible with Siril < 1.2.0.
         #
-        # DIAGNOSTIC: ``setfindstar`` was added after the orion2 reference
-        # run.  The relaxed values (radius=20, sigma=0.5, roundness=0.3)
-        # let Siril accept non-stellar structures (nebula contours, hot
-        # pixels) as alignment anchors, smearing the chrominance of bright
-        # nebula cores during the stack.  Reverted to Siril defaults to test
-        # whether this restores the M42 colour palette of orion2.
-        # commands.append("setfindstar reset")
-        # commands.append(
-        #     "setfindstar -radius=20 -sigma=0.5 -roundness=0.3 -relax=on"
-        # )
+        # ``setfindstar`` configures Siril's star detector session-wide.
+        # By default we leave Siril's built-in values untouched (radius=10,
+        # sigma=1.0, roundness=0.5) which preserve nebular chrominance during
+        # the stack: relaxed values let non-stellar structures become
+        # alignment anchors, introducing micro-jitter that smears fine
+        # colour details on bright cores (observed on M42).  Enable
+        # ``findstar_override_enabled`` only on faint/wide-field rigs where
+        # Siril fails to find enough genuine stars.
+        if self.config.findstar_override_enabled:
+            relax_flag = "on" if self.config.findstar_relax else "off"
+            commands.append("setfindstar reset")
+            commands.append(
+                f"setfindstar -radius={int(self.config.findstar_radius)} "
+                f"-sigma={float(self.config.findstar_sigma):.2f} "
+                f"-roundness={float(self.config.findstar_roundness):.2f} "
+                f"-relax={relax_flag}"
+            )
 
         # Step 1: analyse star patterns and compute per-frame transforms; writes
         # only pp_light.seq metadata (no output frames yet).
