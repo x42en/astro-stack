@@ -80,7 +80,7 @@ class TestProcessingProfileConfig:
     def test_default_config_is_standard_like(self) -> None:
         """Default config should have sensible defaults matching standard preset."""
         config = ProcessingProfileConfig()
-        assert config.rejection_algorithm == "sigma"
+        assert config.rejection_algorithm == "winsorized"
         assert config.denoise_enabled is True
         assert config.sharpen_enabled is True
 
