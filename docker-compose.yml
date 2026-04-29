@@ -149,11 +149,11 @@ services:
     labels:
       - "traefik.enable=true"
       # HTTP router (redirected to HTTPS by entrypoint-level rule in traefik.yml)
-      - "traefik.http.routers.astro-api.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
+      - "traefik.http.routers.astro-api.rule=Host(`${TRAEFIK_HOST:-stack.astromote.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.astro-api.entrypoints=web"
       - "traefik.http.routers.astro-api.service=astro-api-svc"
       # HTTPS router
-      - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
+      - "traefik.http.routers.astro-api-secure.rule=Host(`${TRAEFIK_HOST:-stack.astromote.com}`) && (PathPrefix(`/api`) || PathPrefix(`/ws`) || PathPrefix(`/health`) || PathPrefix(`/docs`) || PathPrefix(`/redoc`) || PathPrefix(`/openapi.json`))"
       - "traefik.http.routers.astro-api-secure.entrypoints=websecure"
       - "traefik.http.routers.astro-api-secure.tls=true"  # self-signed cert (dev)
       # [PROD] Replace the line above with: traefik.http.routers.astro-api-secure.tls.certresolver=letsencrypt
@@ -298,8 +298,8 @@ services:
       # VITE_* variables are baked in at build time and have no effect on the
       # pre-built image. Use the Settings page in the UI to reconfigure at runtime.
       # These values are provided as documentation for local rebuilds only.
-      VITE_API_BASE_URL: https://${TRAEFIK_HOST:-astro.circle-cyber.com}/api/v1
-      VITE_WS_BASE_URL: wss://${TRAEFIK_HOST:-astro.circle-cyber.com}/ws
+      VITE_API_BASE_URL: https://${TRAEFIK_HOST:-stack.astromote.com}/api/v1
+      VITE_WS_BASE_URL: wss://${TRAEFIK_HOST:-stack.astromote.com}/ws
     depends_on:
       - astro-api
     networks:
@@ -307,11 +307,11 @@ services:
     labels:
       - "traefik.enable=true"
       # HTTP router (redirected to HTTPS by entrypoint-level rule in traefik.yml)
-      - "traefik.http.routers.astro-ui.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`)"
+      - "traefik.http.routers.astro-ui.rule=Host(`${TRAEFIK_HOST:-stack.astromote.com}`)"
       - "traefik.http.routers.astro-ui.entrypoints=web"
       - "traefik.http.routers.astro-ui.service=astro-ui-svc"
       # HTTPS router — lower priority than astro-api-secure (shorter rule = lower precedence)
-      - "traefik.http.routers.astro-ui-secure.rule=Host(`${TRAEFIK_HOST:-astro.circle-cyber.com}`)"
+      - "traefik.http.routers.astro-ui-secure.rule=Host(`${TRAEFIK_HOST:-stack.astromote.com}`)"
       - "traefik.http.routers.astro-ui-secure.entrypoints=websecure"
       - "traefik.http.routers.astro-ui-secure.tls=true"  # self-signed cert (dev)
       # [PROD] Replace the line above with: traefik.http.routers.astro-ui-secure.tls.certresolver=letsencrypt
