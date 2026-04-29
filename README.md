@@ -32,8 +32,26 @@ repository.
 
 - **End-to-end pipeline** — 10 verified steps from RAW conversion to export
   (`app/pipeline/steps/`).
-- **Profile presets** — `quick`, `standard`, `quality`, `advanced` plus full
-  custom profile support.
+- **Live stacking with on-rig coaching** — drop frames as they come off the
+  sensor and watch the stack build in real time. The `app/livestack/` engine
+  computes per-frame statistics (median R/G/B, clipping, FWHM) and a
+  recommender (`app/livestack/recommender.py`) emits prioritised exposure,
+  white-balance and focus advice over WebSocket while you are still at the
+  telescope.
+- **Session ownership & resume** — each user gets at most one active live
+  session at a time, exposed via `GET /sessions/active-live` so the UI can
+  surface a persistent "Resume" banner and a 409 redirect if a second one is
+  attempted.
+- **Calibration libraries per session** — dedicated upload endpoints for
+  `darks/`, `flats/` and `dark_flats/` sub-folders with progress tracking and
+  frame-count snapshots on the session row.
+- **Observation planning** — followed-objects catalogue, observation-site
+  registry (`app/api/v1/observation_sites.py`, `app/api/v1/followed_objects.py`)
+  and weather-window scoring drive the session-prep flow with curated target
+  recommendations matched to the user's location and forecast.
+- **Profile presets & per-session overrides** — `quick`, `standard`, `quality`,
+  `advanced` plus a fully custom profile editor. Every pipeline step is
+  individually tunable.
 - **Profile import / export** — round-trip JSON via `GET /profiles/{id}/export`
   and `POST /profiles/import`.
 - **Profile sharing** — toggle a profile public with `PATCH /profiles/{id}/share`;
