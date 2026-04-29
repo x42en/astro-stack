@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware.auth import prefetch_jwks
 from app.api.middleware.error_handler import register_error_handlers
+from app.api.v1.admin_gallery import router as admin_gallery_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.catalog import router as catalog_router
 from app.api.v1.gallery import router as gallery_router
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     # ── API routers ───────────────────────────────────────────────────────────
+    app.include_router(admin_gallery_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(sessions_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")
