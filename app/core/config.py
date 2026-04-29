@@ -7,7 +7,7 @@ will cause an explicit startup failure with a descriptive error message.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,10 +54,33 @@ class Settings(BaseSettings):
     log_level: Literal["debug", "info", "warning", "error"] = "info"
 
     # ── Authentication ────────────────────────────────────────────────────────
+    # auth_enabled: legacy toggle kept for backwards compatibility.
+    # Prefer AUTH_MODE which takes priority if explicitly set.
+    #   disabled → all checks bypassed (local dev, no auth server needed)
+    #   mock     → HS256 JWT + X-Mock-User header (staging / integration tests)
+    #   oidc     → OIDC/OAuth 2.1 via external provider (production)
     auth_enabled: bool = False
+    auth_mode: Optional[Literal["disabled", "mock", "oidc"]] = None
     jwt_secret: str = Field(default="change-me-in-production", min_length=16)
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = Field(default=60, gt=0)
+
+    # ── OIDC (used when effective_auth_mode="oidc") ───────────────────────────
+    oidc_issuer: Optional[str] = None
+    oidc_audience: Optional[str] = None
+    # Derived automatically from oidc_issuer if not set:
+    # https://<issuer>/api/auth/jwks
+    oidc_jwks_url: Optional[str] = None
+    oidc_jwks_cache_ttl_seconds: int = Field(default=3600, ge=60)
+    # Role name in the OIDC token that grants admin access (Settings page, etc.)
+    oidc_admin_role: str = "admin"
+    # Username that acts as admin in mock mode (X-Mock-User header value)
+    mock_admin_user: str = "admin"
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    # Comma-separated list of allowed origins. Use "*" (default) during dev;
+    # restrict to known origins in production (e.g. "https://app.astromote.com").
+    cors_allowed_origins: str = "*"
 
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(default="postgresql+asyncpg://astro:astro@localhost:5432/astrostack")
@@ -123,6 +146,38 @@ class Settings(BaseSettings):
     # object "visible" during the planning night window.
     planner_min_altitude_deg: float = Field(default=30.0, ge=5.0, le=85.0)
     planner_max_results: int = Field(default=50, ge=1, le=200)
+
+    @property
+    def effective_auth_mode(self) -> Literal["disabled", "mock", "oidc"]:
+        """Resolve the active authentication mode from env vars.
+
+        Priority: AUTH_MODE > AUTH_ENABLED + OIDC_ISSUER heuristic.
+        """
+        if self.auth_mode is not None:
+            return self.auth_mode
+        if not self.auth_enabled:
+            return "disabled"
+        if self.oidc_issuer:
+            return "oidc"
+        return "mock"
+
+    @property
+    def oidc_jwks_endpoint(self) -> Optional[str]:
+        """JWKS URL for OIDC token verification.
+
+        Falls back to ``<oidc_issuer>/api/auth/jwks`` if not explicitly set.
+        """
+        if self.oidc_jwks_url:
+            return self.oidc_jwks_url
+        if self.oidc_issuer:
+            return f"{self.oidc_issuer.rstrip('/')}/api/auth/jwks"
+        return None
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse ``cors_allowed_origins`` into a list of origin strings."""
+        parts = [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+        return parts or ["*"]
 
     @field_validator("gpu_devices")
     @classmethod
