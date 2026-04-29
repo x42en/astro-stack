@@ -151,6 +151,69 @@ async def run_pipeline(
             return {"error": str(exc), "error_code": "SYS_INTERNAL_ERROR"}
 
 
+# ── Live-stacking task ────────────────────────────────────────────────────────
+
+
+async def livestack_ingest_frame(
+    ctx: dict[str, Any],
+    session_id_str: str,
+    frame_path: str,
+) -> dict[str, Any]:
+    """ARQ task: ingest a single frame into the live stack of a session.
+
+    The task is idempotent at the file level (writing the same frame twice
+    is a no-op for the running mean — but a per-session Redis lock still
+    serialises ingestion to keep counters consistent).
+
+    Args:
+        ctx: ARQ worker context (provides ``event_bus``, Redis pool).
+        session_id_str: UUID string of the parent session.
+        frame_path: Absolute filesystem path to the frame to ingest.
+
+    Returns:
+        Dict ``{"frame_count": int, "rejected_count": int}`` reflecting
+        the post-ingestion state.
+    """
+    from app.livestack.service import LiveStackService  # noqa: PLC0415
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    session_id = uuid.UUID(session_id_str)
+    settings = get_settings()
+    event_bus: EventBus = ctx["event_bus"]
+
+    # The ARQ Redis pool is already an aioredis client — reuse it for
+    # state storage to avoid a second TCP connection per worker.
+    redis = ctx.get("redis")
+    if redis is None:
+        import redis.asyncio as aioredis  # noqa: PLC0415
+
+        redis = aioredis.from_url(settings.redis_url_str, decode_responses=True)
+
+    file_store = FileStore(settings)
+    state_repo = LiveStackStateRepository(redis)
+    service = LiveStackService(file_store, state_repo, event_bus)
+
+    lock_key = f"livestack:lock:{session_id_str}"
+    acquired = await redis.set(lock_key, "1", nx=True, ex=120)
+    if not acquired:
+        # Another worker is currently ingesting a frame for the same
+        # session; ARQ's retry mechanism will reschedule us.
+        raise Retry(defer=2)
+
+    try:
+        new_state = await service.ingest_frame(session_id, frame_path)
+    finally:
+        try:
+            await redis.delete(lock_key)
+        except Exception:  # pragma: no cover - best effort
+            logger.warning("livestack_lock_release_failed", session_id=session_id_str)
+
+    return {
+        "frame_count": new_state.frame_count,
+        "rejected_count": new_state.rejected_count,
+    }
+
+
 # ── ARQ context lifecycle ─────────────────────────────────────────────────────
 
 

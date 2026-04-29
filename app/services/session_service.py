@@ -107,6 +107,57 @@ class SessionService:
         )
         return created
 
+    async def create_session(self, payload: SessionCreate) -> AstroSession:
+        """Create a session with no frames yet (live or empty batch).
+
+        Used by the REST API ``POST /sessions`` endpoint when the user
+        starts a live-stacking session from the planner: no frames have
+        been uploaded yet, but we want a persistent record so the
+        worker can stream incremental events to a known session UUID.
+
+        Args:
+            payload: Validated :class:`~app.domain.session.SessionCreate`
+                payload from the API. ``inbox_path`` is auto-allocated
+                when missing.
+
+        Returns:
+            The freshly persisted :class:`AstroSession`.
+        """
+        from app.core.config import get_settings  # noqa: PLC0415
+        from app.domain.session import SessionMode  # noqa: PLC0415
+
+        session_id = uuid.uuid4()
+        settings = get_settings()
+        inbox_path = payload.inbox_path or str(
+            Path(settings.inbox_path) / str(session_id)
+        )
+
+        session = AstroSession(
+            id=session_id,
+            name=payload.name,
+            inbox_path=inbox_path,
+            status=SessionStatus.READY if payload.mode == SessionMode.LIVE else SessionStatus.PENDING,
+            input_format=None,
+            mode=payload.mode.value,
+            object_name=payload.object_name,
+            target_ra=payload.target_ra,
+            target_dec=payload.target_dec,
+            acquired_at=payload.acquired_at,
+        )
+        created = await self._session_repo.create(session)
+
+        # Pre-create the inbox directory so live frame uploads can write
+        # immediately without a TOCTOU race.
+        Path(inbox_path).mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "session_created_empty",
+            session_id=str(created.id),
+            mode=payload.mode.value,
+            name=payload.name,
+        )
+        return created
+
     async def get_or_404(self, session_id: uuid.UUID) -> AstroSession:
         """Retrieve a session by ID or raise a 404 error.
 

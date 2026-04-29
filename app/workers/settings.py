@@ -9,7 +9,7 @@ from __future__ import annotations
 from arq.connections import RedisSettings
 
 from app.infrastructure.queue.broker import get_arq_redis_settings
-from app.workers.tasks import run_pipeline, shutdown, startup
+from app.workers.tasks import livestack_ingest_frame, run_pipeline, shutdown, startup
 
 
 def _get_redis_settings() -> RedisSettings:
@@ -37,7 +37,7 @@ class WorkerSettings:
         retry_jobs: Whether to automatically retry failed jobs.
     """
 
-    functions = [run_pipeline]
+    functions = [run_pipeline, livestack_ingest_frame]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = _get_redis_settings()

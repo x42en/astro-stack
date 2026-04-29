@@ -67,6 +67,9 @@ class EventType(str, Enum):
     SESSION_DETECTED = "session_detected"
     SESSION_READY = "session_ready"
     SESSION_STATUS = "session_status"
+    LIVESTACK_FRAME_ACCEPTED = "livestack_frame_accepted"
+    LIVESTACK_FRAME_REJECTED = "livestack_frame_rejected"
+    LIVESTACK_PREVIEW_UPDATED = "livestack_preview_updated"
 
 
 class LogLevel(str, Enum):
@@ -299,6 +302,67 @@ class SessionStatusEvent(BaseEvent):
     job_status: Optional[str] = None
 
 
+# ── Live-stacking events ──────────────────────────────────────────────────────
+
+
+class LiveStackFrameAcceptedEvent(BaseEvent):
+    """A new frame was successfully aligned and merged into the live stack.
+
+    Attributes:
+        type: Always ``EventType.LIVESTACK_FRAME_ACCEPTED``.
+        frame_index: 1-based index of this frame within the live session.
+        frame_count: Total frames now contributing to the running stack.
+        total_integration_seconds: Cumulative exposure time when known.
+        fwhm: Estimated full-width-half-maximum of stars in this frame, or
+            ``None`` when star detection was skipped.
+        message: Short human-readable status line for the UI.
+    """
+
+    type: Literal[EventType.LIVESTACK_FRAME_ACCEPTED] = EventType.LIVESTACK_FRAME_ACCEPTED
+    frame_index: int
+    frame_count: int
+    total_integration_seconds: Optional[float] = None
+    fwhm: Optional[float] = None
+    message: Optional[str] = None
+
+
+class LiveStackFrameRejectedEvent(BaseEvent):
+    """A frame failed ingestion (alignment failure, decode error, etc.).
+
+    Attributes:
+        type: Always ``EventType.LIVESTACK_FRAME_REJECTED``.
+        frame_index: 1-based index of the rejected frame.
+        reason: Short machine-readable reason code (e.g. ``"alignment_failed"``).
+        message: Human-readable explanation displayed in the UI log.
+    """
+
+    type: Literal[EventType.LIVESTACK_FRAME_REJECTED] = EventType.LIVESTACK_FRAME_REJECTED
+    frame_index: int
+    reason: str
+    message: str
+
+
+class LiveStackPreviewUpdatedEvent(BaseEvent):
+    """The live preview JPEG has been regenerated and is ready to fetch.
+
+    The client refetches ``GET /sessions/{id}/live/preview`` using
+    ``preview_generation`` as the cache-busting key.
+
+    Attributes:
+        type: Always ``EventType.LIVESTACK_PREVIEW_UPDATED``.
+        preview_generation: Monotonic counter — increments at every regen.
+        frame_count: Number of frames currently merged in the running stack.
+        width: Preview width in pixels.
+        height: Preview height in pixels.
+    """
+
+    type: Literal[EventType.LIVESTACK_PREVIEW_UPDATED] = EventType.LIVESTACK_PREVIEW_UPDATED
+    preview_generation: int
+    frame_count: int
+    width: int
+    height: int
+
+
 # ── Union type for client-side deserialisation ────────────────────────────────
 
 AnyEvent = Union[
@@ -311,4 +375,7 @@ AnyEvent = Union[
     SessionDetectedEvent,
     SessionReadyEvent,
     SessionStatusEvent,
+    LiveStackFrameAcceptedEvent,
+    LiveStackFrameRejectedEvent,
+    LiveStackPreviewUpdatedEvent,
 ]

@@ -113,6 +113,8 @@ RUN pip install \
         httpx astropy astroquery rawpy numpy Pillow ExifRead \
         skyfield timezonefinder \
         watchdog python-multipart aiofiles anyio structlog \
+        # Live-stacking pipeline (frame alignment + hot-pixel rejection)
+        astroalign scipy \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
 

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Automated astrophotography processing pipeline with event-driven API"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Astro-Stack Team" }]
 
 dependencies = [
@@ -39,6 +39,9 @@ dependencies = [
     "rawpy>=0.22.0",
     "numpy>=1.26.0",
     "Pillow>=10.3.0",
+    # Live-stacking (frame alignment + scientific signal processing)
+    "astroalign>=2.5",
+    "scipy>=1.13",
     # Sky planning (visibility, moon phase, sun rise/set)
     "skyfield>=1.49",
     "timezonefinder>=6.5",
