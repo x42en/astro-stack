@@ -16,7 +16,15 @@ x-astro-common: &astro-common
     # GPU
     - NVIDIA_VISIBLE_DEVICES=all
     - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-    # Auth (disabled by default; set AUTH_ENABLED=true to activate)
+    # Auth — AUTH_MODE takes precedence over the legacy AUTH_ENABLED flag.
+    # Set AUTH_MODE=oidc for production, AUTH_MODE=mock for staging, AUTH_MODE=disabled (default) for dev.
+    - AUTH_MODE=${AUTH_MODE:-disabled}
+    - OIDC_ISSUER=${OIDC_ISSUER:-}
+    - OIDC_AUDIENCE=${OIDC_AUDIENCE:-}
+    - OIDC_JWKS_CACHE_TTL_SECONDS=${OIDC_JWKS_CACHE_TTL_SECONDS:-3600}
+    - OIDC_ADMIN_ROLE=${OIDC_ADMIN_ROLE:-admin}
+    - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+    # Legacy — kept for AUTH_MODE=mock backward compatibility
     - AUTH_ENABLED=${AUTH_ENABLED:-false}
     - JWT_SECRET=${JWT_SECRET:-change-me-in-production-min-16-chars}
     # Database — uses embedded postgres container

@@ -13,7 +13,9 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.middleware.auth import prefetch_jwks
 from app.api.middleware.error_handler import register_error_handlers
+from app.api.v1.auth import router as auth_router
 from app.api.v1.catalog import router as catalog_router
 from app.api.v1.gallery import router as gallery_router
 from app.api.v1.jobs import router as jobs_router
@@ -52,12 +54,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     settings = get_settings()
     configure_logging(settings.log_level)
-    logger.info("astro_stack_starting", version=settings.app_version)
+    logger.info(
+        "astro_stack_starting",
+        version=settings.app_version,
+        auth_mode=settings.effective_auth_mode,
+    )
 
     # ── Database ──────────────────────────────────────────────────────────────
     init_db()
     await create_all_tables()
     logger.info("database_ready")
+
+    # ── JWKS prefetch (best-effort) ───────────────────────────────────────────
+    await prefetch_jwks()
 
     # ── Event bus ─────────────────────────────────────────────────────────────
     event_bus = EventBus(redis_url=settings.redis_url_str)
@@ -142,9 +151,12 @@ def create_app() -> FastAPI:
     )
 
     # ── CORS ──────────────────────────────────────────────────────────────────
+    # Origins are driven by CORS_ALLOWED_ORIGINS (comma-separated).
+    # Default "*" is safe for internal / dev deployments; production should
+    # set CORS_ALLOWED_ORIGINS=https://app.astromote.com
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Restrict in production
+        allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -154,6 +166,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     # ── API routers ───────────────────────────────────────────────────────────
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(sessions_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")
     app.include_router(profiles_router, prefix="/api/v1")
