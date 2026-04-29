@@ -54,6 +54,22 @@ class InputFormat(str, Enum):
     MIXED = "mixed"
 
 
+class SessionMode(str, Enum):
+    """Session ingestion mode.
+
+    Attributes:
+        BATCH: Frames are uploaded en masse, then the full pipeline is run
+            on demand. The historical default.
+        LIVE: Frames arrive one at a time during acquisition; an incremental
+            live-stacking preview is rendered after each frame. The full
+            post-processing pipeline can still be triggered later on the
+            collected frames.
+    """
+
+    BATCH = "batch"
+    LIVE = "live"
+
+
 class AstroSession(SQLModel, table=True):
     """ORM model representing an astrophotography imaging session.
 
@@ -97,6 +113,27 @@ class AstroSession(SQLModel, table=True):
     frame_count_darks: int = Field(default=0, ge=0)
     frame_count_flats: int = Field(default=0, ge=0)
     frame_count_bias: int = Field(default=0, ge=0)
+    frame_count_dark_flats: int = Field(default=0, ge=0)
+
+    # Ingestion mode (batch upload vs. live acquisition with incremental
+    # stacking).  See :class:`SessionMode` for semantics.
+    mode: str = Field(
+        default=SessionMode.BATCH,
+        sa_column=Column(String(20), nullable=False, index=True, server_default="batch"),
+    )
+
+    # Number of frames ingested by the live stacker.  Distinct from
+    # ``frame_count_lights`` so we can distinguish frames already merged in
+    # the running stack from frames present on disk but not yet processed.
+    live_frame_count: int = Field(default=0, ge=0)
+
+    # Owner of the session (UUID resolved from the JWT ``sub`` claim or from
+    # the ``X-Mock-User`` header in mock-auth mode).  Nullable so sessions
+    # created before the ownership migration keep working unchanged.
+    owner_id: Optional[uuid.UUID] = Field(
+        default=None,
+        sa_column=Column(PG_UUID(as_uuid=True), nullable=True, index=True),
+    )
 
     object_name: Optional[str] = Field(default=None, max_length=255)
     ra: Optional[float] = Field(default=None)
@@ -161,11 +198,26 @@ class SessionCreate(SQLModel):
 
     Attributes:
         name: Human-readable session name.
-        inbox_path: Path under ``/inbox/`` for this session.
+        inbox_path: Optional explicit path under ``/inbox/``. When omitted
+            (typical for live sessions) the API allocates ``/inbox/{uuid}``.
+        mode: Session ingestion mode (batch / live). Defaults to ``batch``
+            so existing clients keep their behaviour.
+        object_name: Optional astronomical target name.
+        target_ra: Optional user-supplied right ascension hint (J2000
+            decimal degrees) — improves plate-solving and is shown in the UI.
+        target_dec: Optional user-supplied declination hint (J2000 decimal
+            degrees).
+        acquired_at: Optional capture timestamp; usually pre-filled from
+            ``/prepare`` when starting a live session for tonight's pick.
     """
 
     name: str = Field(max_length=255)
-    inbox_path: str = Field(max_length=1024)
+    inbox_path: Optional[str] = Field(default=None, max_length=1024)
+    mode: SessionMode = SessionMode.BATCH
+    object_name: Optional[str] = Field(default=None, max_length=255)
+    target_ra: Optional[float] = None
+    target_dec: Optional[float] = None
+    acquired_at: Optional[datetime] = None
 
 
 class SessionRead(SQLModel):
@@ -193,10 +245,14 @@ class SessionRead(SQLModel):
     inbox_path: str
     status: SessionStatus
     input_format: Optional[InputFormat]
+    mode: SessionMode = SessionMode.BATCH
+    live_frame_count: int = 0
+    owner_id: Optional[uuid.UUID] = None
     frame_count_lights: int
     frame_count_darks: int
     frame_count_flats: int
     frame_count_bias: int
+    frame_count_dark_flats: int = 0
     object_name: Optional[str]
     ra: Optional[float]
     dec: Optional[float]

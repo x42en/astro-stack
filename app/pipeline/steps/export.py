@@ -112,7 +112,11 @@ class ExportStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "export.jpg"
-            await save_step_preview(source_fits, preview_path)
+            await save_step_preview(
+                source_fits,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/export"
         except Exception:  # noqa: BLE001
             logger.warning("export_preview_failed")
@@ -125,6 +129,14 @@ class ExportStep(PipelineStep):
                 "jpeg_path": str(jpeg_out),
                 "thumbnail_path": str(thumb_out),
                 **({"preview_url": preview_url} if preview_url else {}),
+                # Surface adaptive overrides applied at job start so the UI
+                # can render a "what the catalogue changed" panel after the
+                # job completes (see :class:`AdaptiveOverridesPanel`).
+                **(
+                    {"adaptive_overrides_applied": context.metadata["adaptive_overrides_applied"]}
+                    if isinstance(context.metadata.get("adaptive_overrides_applied"), dict)
+                    else {}
+                ),
             },
             message="Export complete.",
         )

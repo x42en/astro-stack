@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.pipeline.utils.object_type import resolve_object_type
+from app.pipeline.utils.object_type import (
+    ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE,
+    SKIP_GRADIENT_REMOVAL_TYPES,
+    SKIP_STAR_SEPARATION_TYPES,
+    SKIP_SUPER_RESOLUTION_TYPES,
+    STRING_OVERRIDES_BY_TYPE,
+    resolve_object_type,
+)
 
 
 @pytest.mark.parametrize("name", ["M81", "m81", "M 81", " M81 "])
@@ -28,3 +35,54 @@ def test_resolve_messier_cluster() -> None:
 def test_unknown_returns_none(name: str | None) -> None:
     """Empty / unknown strings fall back to ``None`` so callers preserve the profile."""
     assert resolve_object_type(name) is None
+
+
+# ── Object-type adaptation policies ──────────────────────────────────────
+
+
+def test_nebula_caps_stretch_strength() -> None:
+    """The nebula override caps ``stretch_strength`` at 150 to avoid burning the
+    M42-class core that the Quality preset's 180 produces."""
+    assert ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE["nebula"]["stretch_strength"] == 150.0
+
+
+def test_galaxy_skips_gradient_removal() -> None:
+    """Galaxies are no longer hard-skipped — the catalogue switches them to
+    chained Object + Stars deconvolution via :data:`STRING_OVERRIDES_BY_TYPE`.
+    The legacy skip set must not list galaxy."""
+    assert "galaxy" not in SKIP_GRADIENT_REMOVAL_TYPES
+
+
+def test_galaxy_routes_to_chained_deconvolution() -> None:
+    """Galaxies default to ``deconv-both-1.0.1`` (object → stars chained)
+    when the user keeps the ``"auto"`` sentinel on ``gradient_removal_ai_model``."""
+    sentinel, target = STRING_OVERRIDES_BY_TYPE["galaxy"]["gradient_removal_ai_model"]
+    assert sentinel == "auto"
+    assert target == "deconv-both-1.0.1"
+
+
+def test_cluster_routes_to_chained_deconvolution() -> None:
+    """Clusters benefit from PSF tightening — same chained deconv as galaxies."""
+    sentinel, target = STRING_OVERRIDES_BY_TYPE["cluster"]["gradient_removal_ai_model"]
+    assert sentinel == "auto"
+    assert target == "deconv-both-1.0.1"
+
+def test_nebula_skips_super_resolution() -> None:
+    """Cosmic Clarity 2× amplifies clipped pixels into reconstruction artefacts
+    on bright nebula cores; opt-in must be auto-disabled."""
+    assert "nebula" in SKIP_SUPER_RESOLUTION_TYPES
+
+
+def test_galaxy_and_cluster_skip_star_separation() -> None:
+    """Star separation destroys HII regions on galaxies and the very subject of
+    clusters; opt-in must be auto-disabled."""
+    assert "galaxy" in SKIP_STAR_SEPARATION_TYPES
+    assert "cluster" in SKIP_STAR_SEPARATION_TYPES
+
+
+def test_nebula_keeps_super_resolution_disabled_by_default() -> None:
+    """Ensure no accidental cross-listing: nebulae must not be in the
+    star-separation skip list (the default 0.8/0.5 weights with the new
+    envelope-preserving recombine work correctly on nebulae)."""
+    assert "nebula" not in SKIP_STAR_SEPARATION_TYPES
+    assert "nebula" not in SKIP_GRADIENT_REMOVAL_TYPES

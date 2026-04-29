@@ -85,11 +85,17 @@ class SirilScriptBuilder:
 
         return commands
 
-    def build_postprocessing_commands(self) -> list[str]:
+    def build_postprocessing_commands(self, pcc_already_ran: bool = False) -> list[str]:
         """Build the post-stacking Siril command sequence (stretch + colour).
 
         The image ``for_stretch.fits`` must exist in the Siril working directory.
         It is loaded, processed in-place, then saved back and closed.
+
+        Args:
+            pcc_already_ran: When ``True``, ``rmgreen`` was already applied
+                inside the PCC pre-step (see :meth:`build_pcc_commands`) and
+                must not be applied again here — applying it twice removes
+                so much green it tips the chrominance toward magenta.
 
         Returns:
             Ordered list of Siril command strings.
@@ -103,7 +109,7 @@ class SirilScriptBuilder:
         # artefact.  The defiltered/stock-DSLR distinction is handled
         # downstream by the display pipeline (per-channel red BP softening
         # and red/saturation boost), not by Siril.
-        if self.config.color_calibration_enabled:
+        if self.config.color_calibration_enabled and not pcc_already_ran:
             commands.append("rmgreen")
         commands.extend(self._stretch_commands())
         # NOTE: 'color_calibration' is a GUI-only feature in Siril 1.4.x and
@@ -123,17 +129,26 @@ class SirilScriptBuilder:
         can tolerate failures (e.g. catalogue download error) without
         aborting the whole post-processing chain.
 
+        We prepend ``rmgreen`` when ``color_calibration_enabled`` so PCC sees
+        a green-neutralised image: feeding PCC a heavily green-biased CFA
+        stack makes its RGB→APASS regression over-compensate by injecting a
+        massive red gain, producing an unnatural red cast on the result.
+        Applying rmgreen first gives PCC a balanced starting point so its
+        per-star calibration only fine-tunes the chrominance.
+
+        When PCC runs, ``build_postprocessing_commands`` skips its own
+        ``rmgreen`` call to avoid double-application.
+
         Returns:
             Ordered list of Siril command strings.
         """
+        commands: list[str] = ["load for_stretch"]
+        if self.config.color_calibration_enabled:
+            commands.append("rmgreen")
         # ``pcc`` defaults: catalogue=auto (APASS), limit-mag derived from FOV.
         # We keep flags minimal so Siril picks sane defaults from the WCS.
-        return [
-            "load for_stretch",
-            "pcc",
-            "save for_stretch",
-            "close",
-        ]
+        commands += ["pcc", "save for_stretch", "close"]
+        return commands
 
     # ── Private command builders ──────────────────────────────────────────────
 
@@ -212,21 +227,23 @@ class SirilScriptBuilder:
 
         # Registration — two-step approach compatible with Siril < 1.2.0.
         #
-        # Tune ``findstar`` *before* registering: the Siril defaults
-        # (``radius=10``, ``sigma=1.0``, ``roundness=0.5``) are tailored for
-        # narrow-field guided rigs and reject the bloated, slightly elongated
-        # stars produced by stock DSLR lenses on wide-field shots — observed
-        # symptom is "Found 1–7 Gaussian profile stars" per frame and the
-        # subsequent "Could not find an image that aligns more than itself"
-        # alignment failure. The looser values below keep narrow-field rigs
-        # working while letting wide-field DSLR data find the hundreds of
-        # stars needed for two-pass alignment.
-        # ``reset`` first so we're not stacking deltas on top of any prior
-        # session-wide setfindstar call (Siril keeps the values process-wide).
-        commands.append("setfindstar reset")
-        commands.append(
-            "setfindstar -radius=20 -sigma=0.5 -roundness=0.3 -relax=on"
-        )
+        # ``setfindstar`` configures Siril's star detector session-wide.
+        # By default we leave Siril's built-in values untouched (radius=10,
+        # sigma=1.0, roundness=0.5) which preserve nebular chrominance during
+        # the stack: relaxed values let non-stellar structures become
+        # alignment anchors, introducing micro-jitter that smears fine
+        # colour details on bright cores (observed on M42).  Enable
+        # ``findstar_override_enabled`` only on faint/wide-field rigs where
+        # Siril fails to find enough genuine stars.
+        if self.config.findstar_override_enabled:
+            relax_flag = "on" if self.config.findstar_relax else "off"
+            commands.append("setfindstar reset")
+            commands.append(
+                f"setfindstar -radius={int(self.config.findstar_radius)} "
+                f"-sigma={float(self.config.findstar_sigma):.2f} "
+                f"-roundness={float(self.config.findstar_roundness):.2f} "
+                f"-relax={relax_flag}"
+            )
 
         # Step 1: analyse star patterns and compute per-frame transforms; writes
         # only pp_light.seq metadata (no output frames yet).

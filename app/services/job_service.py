@@ -172,6 +172,22 @@ class JobService:
             steps=step_reads,
         )
 
+    async def get_latest_job_for_session(
+        self,
+        session_id: uuid.UUID,
+    ) -> Optional[JobRead]:
+        """Return the most recent job for ``session_id`` (any status), or ``None``.
+
+        Used by the UI to recover the rendered preview when the client-side
+        session→job mapping has been lost (e.g. after a server restart or
+        cleared local storage). The returned :class:`JobRead` includes the
+        full step plan so the UI can drive the per-step preview browser.
+        """
+        jobs = await self._job_repo.list_by_session(session_id, offset=0, limit=1)
+        if not jobs:
+            return None
+        return await self.get_job_with_steps(jobs[0].id)
+
     async def cancel_job(self, job_id: uuid.UUID) -> PipelineJob:
         """Request cancellation of a running job.
 

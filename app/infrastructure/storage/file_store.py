@@ -51,6 +51,9 @@ RAW_DSLR_EXTENSIONS: frozenset[str] = frozenset(
 # Frame type detection by directory name (case-insensitive)
 DARK_DIR_NAMES: frozenset[str] = frozenset({"darks", "dark"})
 FLAT_DIR_NAMES: frozenset[str] = frozenset({"flats", "flat"})
+DARK_FLAT_DIR_NAMES: frozenset[str] = frozenset(
+    {"dark_flats", "darkflats", "dark-flats", "dark_flat", "darkflat"}
+)
 BIAS_DIR_NAMES: frozenset[str] = frozenset({"bias", "biases", "offset", "offsets"})
 LIGHT_DIR_NAMES: frozenset[str] = frozenset({"lights", "light", "raws", "raw", "subs", "frames"})
 
@@ -156,6 +159,49 @@ class FileStore:
         """
         return self.output_root / str(session_id) / "previews" / "light_preview.jpg"
 
+    # ── Live-stacking artefacts ───────────────────────────────────────────────
+
+    def live_dir(self, session_id: uuid.UUID) -> Path:
+        """Return the directory holding all live-stacking artefacts.
+
+        Layout under ``/output/{session_id}/live/``:
+
+        - ``preview.jpg`` — current display preview (atomic write).
+        - ``accumulator.dat`` — float32 ``np.memmap`` running mean.
+        - ``reference.npy`` — first accepted frame, used for alignment.
+        - ``frames/`` — copies of every accepted raw frame, kept for
+          a later batch reprocess (size proportional to ``live_frame_count``).
+
+        Args:
+            session_id: Session UUID.
+
+        Returns:
+            Directory path (not created — call :meth:`ensure_live_dir`).
+        """
+        return self.output_root / str(session_id) / "live"
+
+    def ensure_live_dir(self, session_id: uuid.UUID) -> Path:
+        """Create the live directory tree if missing and return its path."""
+        live = self.live_dir(session_id)
+        (live / "frames").mkdir(parents=True, exist_ok=True)
+        return live
+
+    def live_preview_path(self, session_id: uuid.UUID) -> Path:
+        """Path to the current live JPEG preview."""
+        return self.live_dir(session_id) / "preview.jpg"
+
+    def live_accumulator_path(self, session_id: uuid.UUID) -> Path:
+        """Path to the on-disk float32 memmap accumulator."""
+        return self.live_dir(session_id) / "accumulator.dat"
+
+    def live_reference_path(self, session_id: uuid.UUID) -> Path:
+        """Path to the saved reference frame (npy)."""
+        return self.live_dir(session_id) / "reference.npy"
+
+    def live_frames_dir(self, session_id: uuid.UUID) -> Path:
+        """Directory storing copies of accepted live frames."""
+        return self.live_dir(session_id) / "frames"
+
     # ── Frame discovery ───────────────────────────────────────────────────────
 
     def discover_frames(
@@ -179,6 +225,7 @@ class FileStore:
             "lights": [],
             "darks": [],
             "flats": [],
+            "dark_flats": [],
             "bias": [],
         }
 
@@ -194,7 +241,10 @@ class FileStore:
                 continue
 
             dir_lower = child.name.lower()
-            if dir_lower in DARK_DIR_NAMES:
+            if dir_lower in DARK_FLAT_DIR_NAMES:
+                # Match dark-flats BEFORE darks because the names overlap.
+                result["dark_flats"].extend(_collect_images(child))
+            elif dir_lower in DARK_DIR_NAMES:
                 result["darks"].extend(_collect_images(child))
             elif dir_lower in FLAT_DIR_NAMES:
                 result["flats"].extend(_collect_images(child))
@@ -216,6 +266,7 @@ class FileStore:
             lights=len(result["lights"]),
             darks=len(result["darks"]),
             flats=len(result["flats"]),
+            dark_flats=len(result["dark_flats"]),
             bias=len(result["bias"]),
         )
         return result

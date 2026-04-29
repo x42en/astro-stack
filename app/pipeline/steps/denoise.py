@@ -134,7 +134,11 @@ class DenoiseStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "denoise.jpg"
-            await save_step_preview(output_path, preview_path)
+            await save_step_preview(
+                output_path,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/denoise"
         except Exception:  # noqa: BLE001
             logger.warning("denoise_preview_failed")

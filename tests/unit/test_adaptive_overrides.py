@@ -35,8 +35,11 @@ def test_cluster_planetary_supernova_only_soften_stretch() -> None:
     assert ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE["planetary"] == {"stretch_strength": 80.0}
 
 
-def test_skip_gradient_removal_types_only_contains_galaxy() -> None:
-    assert SKIP_GRADIENT_REMOVAL_TYPES == frozenset({"galaxy"})
+def test_skip_gradient_removal_types_is_empty() -> None:
+    """Galaxies are no longer hard-skipped — the catalogue routes them to
+    chained Object + Stars deconvolution via :data:`STRING_OVERRIDES_BY_TYPE`.
+    The legacy skip frozenset is kept as an empty extension point."""
+    assert SKIP_GRADIENT_REMOVAL_TYPES == frozenset()
 
 
 # ── resolve_and_cache_object_type ────────────────────────────────────────
@@ -100,6 +103,11 @@ def _galaxy_config() -> dict[str, Any]:
         "sharpen_stellar_amount": 0.50,
         "sharpen_nonstellar_amount": 0.50,
         "gradient_removal_enabled": True,
+        "gradient_removal_ai_model": "auto",
+        "super_resolution_enabled": False,
+        "super_resolution_mode": "auto",
+        "star_separation_enabled": False,
+        "star_separation_mode": "auto",
     }
 
 
@@ -116,12 +124,17 @@ async def test_galaxy_overrides_are_applied() -> None:
     assert config["denoise_strength"] == 0.40
     assert config["sharpen_stellar_amount"] == 0.20
     assert config["sharpen_nonstellar_amount"] == 0.25
-    assert config["gradient_removal_enabled"] is False
+    # Galaxy is no longer hard-skipped — it is re-routed to chained
+    # Object + Stars deconvolution via the catalogue's ``"auto"`` resolver.
+    assert config["gradient_removal_enabled"] is True
+    assert config["gradient_removal_ai_model"] == "deconv-both-1.0.1"
 
     applied = ctx.metadata["adaptive_overrides_applied"]
     assert applied["object_type"] == "galaxy"
     assert "stretch_strength" in applied["fields"]
-    assert "gradient_removal_enabled" in applied["fields"]
+    assert "gradient_removal_ai_model" in applied["fields"]
+    assert applied["fields"]["gradient_removal_ai_model"]["source"] == "auto_catalogue"
+    assert applied["fields"]["stretch_strength"]["source"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -134,8 +147,22 @@ async def test_no_overrides_for_unknown_target() -> None:
 
     await orch._apply_adaptive_overrides(ctx, config)
 
-    assert config == snapshot
-    assert "adaptive_overrides_applied" not in ctx.metadata
+    # ``gradient_removal_ai_model="auto"`` is always resolved (Phase 0bis),
+    # falling back to the historical BGE 1.0.1 default for unknown types so
+    # downstream steps never see the placeholder.
+    assert config["gradient_removal_ai_model"] == "1.0.1"
+    applied = ctx.metadata["adaptive_overrides_applied"]
+    assert applied["object_type"] is None
+    assert applied["fields"]["gradient_removal_ai_model"]["source"] == "auto_default"
+    # Numeric / boolean fields are untouched on unknown types.
+    for key in (
+        "stretch_strength",
+        "denoise_strength",
+        "sharpen_stellar_amount",
+        "sharpen_nonstellar_amount",
+        "gradient_removal_enabled",
+    ):
+        assert config[key] == snapshot[key]
 
 
 @pytest.mark.asyncio
@@ -183,7 +210,8 @@ async def test_stretch_override_skipped_when_method_not_asinh() -> None:
     assert config["stretch_strength"] == 150.0
     # Other galaxy overrides still apply.
     assert config["denoise_strength"] == 0.40
-    assert config["gradient_removal_enabled"] is False
+    # Galaxy step stays enabled — routed to deconv-both.
+    assert config["gradient_removal_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -198,3 +226,151 @@ async def test_cluster_only_softens_stretch() -> None:
     assert config["stretch_strength"] == 50.0
     assert config["denoise_strength"] == 0.85  # untouched
     assert config["gradient_removal_enabled"] is True  # not skipped
+
+
+# ── Tri-state mode for super_resolution / star_separation ────────────────
+
+
+@pytest.mark.asyncio
+async def test_super_resolution_force_off_overrides_user_enabled() -> None:
+    """``super_resolution_mode='off'`` disables the step regardless of
+    object type, even when the catalogue would have allowed it."""
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M81"  # galaxy → catalogue allows super-res
+    config = _galaxy_config()
+    config["super_resolution_enabled"] = True
+    config["super_resolution_mode"] = "off"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["super_resolution_enabled"] is False
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "super_resolution_enabled"
+        ]["source"]
+        == "force_off"
+    )
+
+
+@pytest.mark.asyncio
+async def test_super_resolution_force_on_overrides_nebula_skip() -> None:
+    """``super_resolution_mode='on'`` runs the step even on bright nebulae
+    where the catalogue would normally skip it."""
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M42"
+    config = _galaxy_config()
+    config["super_resolution_enabled"] = False
+    config["super_resolution_mode"] = "on"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["super_resolution_enabled"] is True
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "super_resolution_enabled"
+        ]["source"]
+        == "force_on"
+    )
+
+
+@pytest.mark.asyncio
+async def test_super_resolution_auto_preserves_catalogue_skip_on_nebula() -> None:
+    """When the user keeps ``mode='auto'`` the catalogue still skips
+    super-resolution on bright nebulae."""
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M42"
+    config = _galaxy_config()
+    config["super_resolution_enabled"] = True
+    config["super_resolution_mode"] = "auto"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["super_resolution_enabled"] is False
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "super_resolution_enabled"
+        ]["source"]
+        == "auto"
+    )
+
+
+@pytest.mark.asyncio
+async def test_star_separation_force_off_overrides_user_enabled() -> None:
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M42"  # nebula → catalogue allows star-sep
+    config = _galaxy_config()
+    config["star_separation_enabled"] = True
+    config["star_separation_mode"] = "off"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["star_separation_enabled"] is False
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "star_separation_enabled"
+        ]["source"]
+        == "force_off"
+    )
+
+
+@pytest.mark.asyncio
+async def test_star_separation_force_on_overrides_galaxy_skip() -> None:
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M81"
+    config = _galaxy_config()
+    config["star_separation_enabled"] = False
+    config["star_separation_mode"] = "on"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["star_separation_enabled"] is True
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "star_separation_enabled"
+        ]["source"]
+        == "force_on"
+    )
+
+
+@pytest.mark.asyncio
+async def test_star_separation_auto_preserves_catalogue_skip_on_galaxy() -> None:
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "M81"
+    config = _galaxy_config()
+    config["star_separation_enabled"] = True
+    config["star_separation_mode"] = "auto"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["star_separation_enabled"] is False
+    assert (
+        ctx.metadata["adaptive_overrides_applied"]["fields"][
+            "star_separation_enabled"
+        ]["source"]
+        == "auto"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tri_state_works_without_object_type() -> None:
+    """Force ON / OFF must be honoured even when the catalogue cannot
+    identify the target (no hint, or unknown name)."""
+    orch = _make_orchestrator()
+    ctx = _make_context()
+    ctx.metadata["object_name_hint"] = "ZZZ-unknown"
+    config = _galaxy_config()
+    config["super_resolution_enabled"] = True
+    config["super_resolution_mode"] = "off"
+
+    await orch._apply_adaptive_overrides(ctx, config)
+
+    assert config["super_resolution_enabled"] is False
+    applied = ctx.metadata["adaptive_overrides_applied"]
+    assert applied["object_type"] is None
+    assert applied["fields"]["super_resolution_enabled"]["source"] == "force_off"

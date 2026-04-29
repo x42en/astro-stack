@@ -167,6 +167,13 @@ class AstapAdapter:
 
         result = self._parse_result(fits_path, output_text)
         result["solved"] = True
+        # Promote the .wcs sidecar into the FITS header so downstream tools
+        # that don't read sidecars (GraXpert, then Siril ``pcc``) still see a
+        # plate-solved image.
+        try:
+            self._inject_wcs_into_fits(fits_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("astap_wcs_inject_failed", error=str(exc))
         return result
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -267,3 +274,79 @@ class AstapAdapter:
             dec=result["dec"],
         )
         return result
+
+    @staticmethod
+    def _inject_wcs_into_fits(fits_path: Path) -> None:
+        """Merge the ``.wcs`` sidecar produced by ASTAP into the FITS header.
+
+        ASTAP's ``-wcs`` flag writes a sidecar file in FITS-card text format
+        (one ``KEYWORD = VALUE / comment`` per line) instead of updating the
+        FITS header in place. Tools that only read the FITS header
+        (GraXpert, Siril's headless ``pcc`` command) therefore see a
+        non-platesolved image.
+
+        This helper reads the sidecar (if present) and copies its
+        WCS-related numeric keywords into the FITS primary header. We
+        deliberately whitelist keys and parse line-by-line so malformed
+        ``CONTINUE`` / long-string cards (which astropy refuses in strict
+        mode) don't abort the merge.
+        """
+        from astropy.io import fits  # noqa: PLC0415
+
+        wcs_path = fits_path.with_suffix(".wcs")
+        if not wcs_path.exists():
+            return
+
+        # Whitelist of header keys we actually need for plate-solving
+        # consumers (Siril ``pcc``). Anything outside this list is ignored
+        # to keep the merge safe.
+        wcs_prefixes = ("CRPIX", "CRVAL", "CTYPE", "CUNIT", "CDELT",
+                        "CROTA", "CD", "PC", "A_", "B_", "AP_", "BP_")
+        wcs_keys = {
+            "WCSAXES", "RADESYS", "EQUINOX", "LONPOLE", "LATPOLE",
+            "PLTSOLVD", "OBJCTRA", "OBJCTDEC", "RA", "DEC",
+        }
+
+        # ASTAP writes the sidecar as concatenated 80-char FITS cards on a
+        # single line (no newlines). ``Header.fromstring`` parses exactly
+        # that fixed-width layout. Pad to a multiple of 80 to be safe.
+        raw_text = wcs_path.read_text(errors="replace").replace("\n", "").replace("\r", "")
+        if len(raw_text) % 80:
+            raw_text = raw_text.ljust(((len(raw_text) // 80) + 1) * 80)
+        try:
+            sidecar_hdr = fits.Header.fromstring(raw_text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "astap_wcs_sidecar_parse_failed",
+                sidecar=str(wcs_path),
+                error=str(exc),
+            )
+            return
+
+        merged: list[tuple[str, Any, str]] = []
+        for card in sidecar_hdr.cards:
+            key = (card.keyword or "").upper()
+            if not key or key in {"END", "COMMENT", "HISTORY", "CONTINUE", ""}:
+                continue
+            if key not in wcs_keys and not key.startswith(wcs_prefixes):
+                continue
+            merged.append((card.keyword, card.value, card.comment))
+
+        if not merged:
+            logger.warning(
+                "astap_wcs_inject_empty",
+                sidecar=str(wcs_path),
+                first_lines=wcs_path.read_text(errors="replace").splitlines()[:6],
+            )
+            return
+
+        with fits.open(str(fits_path), mode="update") as hdul:
+            tgt_hdr = hdul[0].header
+            for key, value, comment in merged:
+                tgt_hdr[key] = (value, comment)
+            hdul.flush()
+        logger.info(
+            "astap_wcs_injected",
+            count=len(merged),
+            keys=sorted({k for k, _, _ in merged})[:20],
+        )

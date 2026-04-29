@@ -665,10 +665,12 @@ class PipelineOrchestrator:
 
         Looks up the bundled catalogue from ``object_name_hint`` /
         ``object_name``.  For known object types (galaxy, cluster, etc.) it
-        merges :data:`ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE` into the config
-        and, for galaxies specifically, disables the gradient_removal step
-        because both GraXpert AI and polynomial modes destroy the FITS
-        on low-SNR diffuse targets.
+        merges :data:`ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE` into the config,
+        switches the GraXpert AI selector to chained object+stars
+        deconvolution on galaxies / clusters via
+        :data:`STRING_OVERRIDES_BY_TYPE`, and disables AI steps that would
+        damage the subject (super-resolution on bright nebulae,
+        star-separation on galaxies / clusters).
 
         Each override is applied **only when the new value is strictly
         less than the current value** so user-customised profiles already
@@ -681,6 +683,9 @@ class PipelineOrchestrator:
         from app.pipeline.utils.object_type import (  # noqa: PLC0415
             ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE,
             SKIP_GRADIENT_REMOVAL_TYPES,
+            SKIP_STAR_SEPARATION_TYPES,
+            SKIP_SUPER_RESOLUTION_TYPES,
+            STRING_OVERRIDES_BY_TYPE,
             resolve_and_cache_object_type,
         )
 
@@ -691,10 +696,65 @@ class PipelineOrchestrator:
             object_name=context.metadata.get("object_name"),
             resolved_type=object_type,
         )
-        if object_type is None:
-            return
 
         applied: dict[str, dict[str, Any]] = {}
+
+        # ── Tri-state user policies (run unconditionally) ────────────────
+        # ``*_mode`` tri-state flags ("auto" | "on" | "off") let the user
+        # explicitly force a step regardless of catalogue identification.
+        # These run before the catalogue-driven phases and apply even when
+        # the object cannot be resolved.
+        for step_name in ("super_resolution", "star_separation"):
+            mode_field = f"{step_name}_mode"
+            enabled_field = f"{step_name}_enabled"
+            mode = config_dict.get(mode_field, "auto")
+            current_enabled = bool(config_dict.get(enabled_field, False))
+            if mode == "off" and current_enabled:
+                applied[enabled_field] = {
+                    "from": True,
+                    "to": False,
+                    "source": "force_off",
+                }
+                config_dict[enabled_field] = False
+            elif mode == "on" and not current_enabled:
+                applied[enabled_field] = {
+                    "from": False,
+                    "to": True,
+                    "source": "force_on",
+                }
+                config_dict[enabled_field] = True
+
+        # ── Phase 0bis: resolve ``gradient_removal_ai_model == "auto"`` ──
+        # When the user keeps the model selector on the special ``"auto"``
+        # placeholder we resolve it here so downstream steps see a concrete
+        # value.  Resolution prefers :data:`STRING_OVERRIDES_BY_TYPE` for
+        # known types and falls back to the historical default ``"1.0.1"``
+        # (GraXpert BGE) for unknown types.
+        if config_dict.get("gradient_removal_ai_model") == "auto":
+            resolved = "1.0.1"
+            source = "auto_default"
+            if object_type is not None:
+                type_overrides = STRING_OVERRIDES_BY_TYPE.get(object_type, {})
+                ai_override = type_overrides.get("gradient_removal_ai_model")
+                if ai_override is not None:
+                    resolved = ai_override[1]
+                    source = "auto_catalogue"
+            applied["gradient_removal_ai_model"] = {
+                "from": "auto",
+                "to": resolved,
+                "source": source,
+            }
+            config_dict["gradient_removal_ai_model"] = resolved
+
+        # The remaining catalogue-driven phases need an identified object.
+        if object_type is None:
+            if applied:
+                context.metadata["adaptive_overrides_applied"] = {
+                    "object_type": None,
+                    "fields": applied,
+                }
+                await self._emit_adaptive_log(applied, object_type=None)
+            return
 
         # 1. Numeric field overrides (stretch / denoise / sharpen).
         overrides = ADAPTIVE_PROFILE_OVERRIDES_BY_TYPE.get(object_type, {})
@@ -708,7 +768,11 @@ class PipelineOrchestrator:
             ):
                 continue
             if new_value < current:
-                applied[field] = {"from": float(current), "to": float(new_value)}
+                applied[field] = {
+                    "from": float(current),
+                    "to": float(new_value),
+                    "source": "auto",
+                }
                 config_dict[field] = new_value
 
         # 2. Boolean policy overrides (skip GraXpert on galaxies).
@@ -716,8 +780,63 @@ class PipelineOrchestrator:
             object_type in SKIP_GRADIENT_REMOVAL_TYPES
             and config_dict.get("gradient_removal_enabled", False)
         ):
-            applied["gradient_removal_enabled"] = {"from": True, "to": False}
+            applied["gradient_removal_enabled"] = {
+                "from": True,
+                "to": False,
+                "source": "auto",
+            }
             config_dict["gradient_removal_enabled"] = False
+
+        # 3. Skip Cosmic Clarity 2× super-resolution on object types where
+        #    the model amplifies clipped pixels into reconstruction
+        #    artefacts (bright nebula cores).  Honoured only when the user
+        #    left the tri-state mode on ``"auto"``.
+        if (
+            config_dict.get("super_resolution_mode", "auto") == "auto"
+            and object_type in SKIP_SUPER_RESOLUTION_TYPES
+            and config_dict.get("super_resolution_enabled", False)
+        ):
+            applied["super_resolution_enabled"] = {
+                "from": True,
+                "to": False,
+                "source": "auto",
+            }
+            config_dict["super_resolution_enabled"] = False
+
+        # 4. Skip star-separation on targets where it destroys the subject
+        #    (galaxies' HII regions, clusters where stars *are* the data).
+        #    Honoured only when the user left the tri-state mode on ``"auto"``.
+        if (
+            config_dict.get("star_separation_mode", "auto") == "auto"
+            and object_type in SKIP_STAR_SEPARATION_TYPES
+            and config_dict.get("star_separation_enabled", False)
+        ):
+            applied["star_separation_enabled"] = {
+                "from": True,
+                "to": False,
+                "source": "auto",
+            }
+            config_dict["star_separation_enabled"] = False
+
+        # 5. String-field overrides (e.g. swap GraXpert BGE for chained
+        #    object+stars deconvolution on galaxies).  Applied only when
+        #    the current value matches the documented default sentinel so
+        #    a user-customised profile is never silently re-routed.
+        #    Skipped here for ``gradient_removal_ai_model`` because Phase
+        #    0bis already handles the ``"auto"`` sentinel above.
+        for field, (default_sentinel, new_value) in (
+            STRING_OVERRIDES_BY_TYPE.get(object_type, {}).items()
+        ):
+            if field in applied:
+                continue
+            current = config_dict.get(field)
+            if current == default_sentinel and current != new_value:
+                applied[field] = {
+                    "from": current,
+                    "to": new_value,
+                    "source": "auto",
+                }
+                config_dict[field] = new_value
 
         if not applied:
             return
@@ -726,6 +845,15 @@ class PipelineOrchestrator:
             "object_type": object_type,
             "fields": applied,
         }
+        await self._emit_adaptive_log(applied, object_type=object_type)
+
+    async def _emit_adaptive_log(
+        self,
+        applied: dict[str, dict[str, Any]],
+        *,
+        object_type: str | None,
+    ) -> None:
+        """Emit the structured log + user-visible event for adaptive overrides."""
         logger.info(
             "adaptive_overrides_applied",
             object_type=object_type,
@@ -734,6 +862,7 @@ class PipelineOrchestrator:
         summary = ", ".join(
             f"{k}: {v['from']}→{v['to']}" for k, v in applied.items()
         )
+        label = object_type if object_type is not None else "user"
         await self.event_bus.publish_job_event(
             self.job_id,
             LogEvent(
@@ -741,7 +870,7 @@ class PipelineOrchestrator:
                 session_id=self.session_id,
                 level=LogLevel.INFO,
                 source=LogSource.SYSTEM,
-                message=f"Adaptive profile ({object_type}): {summary}",
+                message=f"Adaptive profile ({label}): {summary}",
             ),
         )
 

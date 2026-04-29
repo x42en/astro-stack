@@ -128,7 +128,34 @@ class StretchColorStep(PipelineStep):
         # failure (missing catalogue, no internet, low star count) must NOT
         # break the post-processing chain.
         wcs_solved = bool(context.metadata.get("solved", False))
+        pcc_ran = False
         if wcs_solved and profile_config.photometric_calibration_enabled:
+            # Diagnostic: inspect what's actually in the FITS Siril is about
+            # to load — confirms whether the WCS chain (ASTAP → GraXpert
+            # output → for_stretch.fits) preserved the plate-solve headers.
+            try:
+                from astropy.io import fits as _fits  # noqa: PLC0415
+
+                with _fits.open(siril_input) as _hdul:
+                    _hdr = _hdul[0].header
+                    _wcs_present = sorted(
+                        k for k in _hdr
+                        if k in {"CRPIX1", "CRVAL1", "CTYPE1", "CD1_1", "PC1_1",
+                                 "RADESYS", "PLTSOLVD"}
+                    )
+                    logger.info(
+                        "stretch_color_pcc_input_header",
+                        path=str(siril_input),
+                        n_hdu=len(_hdul),
+                        hdu0_shape=getattr(_hdul[0].data, "shape", None),
+                        wcs_keys_present=_wcs_present,
+                        ctype1=_hdr.get("CTYPE1"),
+                        ctype2=_hdr.get("CTYPE2"),
+                        crval1=_hdr.get("CRVAL1"),
+                        crval2=_hdr.get("CRVAL2"),
+                    )
+            except Exception as _exc:  # noqa: BLE001
+                logger.warning("stretch_color_pcc_input_header_failed", error=str(_exc))
             try:
                 async with SirilAdapter(
                     work_dir=context.work_dir / "output",
@@ -145,11 +172,21 @@ class StretchColorStep(PipelineStep):
                 pcc_out = context.work_dir / "output" / "for_stretch.fit"
                 if pcc_out.exists():
                     os.replace(str(pcc_out), str(siril_input))
+                pcc_ran = True
                 logger.info("siril_pcc_done")
             except Exception as exc:  # noqa: BLE001
-                logger.warning("siril_pcc_failed", error=str(exc))
+                # Surface the underlying Siril console output so the actual
+                # cause (missing WCS, catalogue download error, low star
+                # count, ...) is visible in the worker logs instead of the
+                # opaque "status: error pcc" wrapper message.
+                siril_log = getattr(exc, "details", {}).get("siril_log", []) if hasattr(exc, "details") else []
+                logger.warning(
+                    "siril_pcc_failed",
+                    error=str(exc),
+                    siril_log=siril_log[-20:] if siril_log else [],
+                )
 
-        commands = builder.build_postprocessing_commands()
+        commands = builder.build_postprocessing_commands(pcc_already_ran=pcc_ran)
 
         if not commands:
             context.stretched_fits_path = input_path
@@ -203,7 +240,11 @@ class StretchColorStep(PipelineStep):
         preview_url: str | None = None
         try:
             preview_path = context.output_dir / "previews" / "stretch_color.jpg"
-            await save_step_preview(stretched_path, preview_path)
+            await save_step_preview(
+                stretched_path,
+                preview_path,
+                camera_defiltered=bool(config.get("camera_defiltered", True)),
+            )
             preview_url = f"/api/v1/sessions/{context.session_id}/step-preview/stretch_color"
         except Exception:  # noqa: BLE001
             logger.warning("stretch_color_preview_failed")

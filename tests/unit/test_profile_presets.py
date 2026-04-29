@@ -37,13 +37,15 @@ class TestPresetConfigs:
         """Quality preset must enable drizzle integration."""
         assert PRESET_QUALITY.drizzle_enabled is True
 
-    def test_quality_preset_super_resolution_is_opt_in(self) -> None:
-        """Super-resolution is heavy; QUALITY no longer enables it by default."""
-        assert PRESET_QUALITY.super_resolution_enabled is False
+    def test_quality_preset_enables_super_resolution(self) -> None:
+        """QUALITY enables super-resolution; the object-type catalogue auto-skips
+        it on bright nebulae (M42-class) where it amplifies clipped cores."""
+        assert PRESET_QUALITY.super_resolution_enabled is True
 
-    def test_quality_preset_star_separation_is_opt_in(self) -> None:
-        """Star separation is heavy; QUALITY no longer enables it by default."""
-        assert PRESET_QUALITY.star_separation_enabled is False
+    def test_quality_preset_enables_star_separation(self) -> None:
+        """QUALITY enables star separation; the object-type catalogue auto-skips
+        it on galaxies / clusters where it destroys the subject."""
+        assert PRESET_QUALITY.star_separation_enabled is True
 
     def test_all_presets_default_to_defiltered_camera(self) -> None:
         """Defiltered cameras are the modern astrophoto norm \u2014 sensible default."""
@@ -71,6 +73,28 @@ class TestPresetConfigs:
         with pytest.raises(ValueError, match="ADVANCED"):
             get_preset_config(ProfilePreset.ADVANCED)
 
+    def test_all_presets_default_gradient_removal_ai_model_to_auto(self) -> None:
+        """All built-in presets keep ``gradient_removal_ai_model="auto"`` so
+        the orchestrator's catalogue resolver picks the right GraXpert
+        model per object type at job start."""
+        assert PRESET_QUICK.gradient_removal_ai_model == "auto"
+        assert PRESET_STANDARD.gradient_removal_ai_model == "auto"
+        assert PRESET_QUALITY.gradient_removal_ai_model == "auto"
+
+    def test_all_presets_default_super_resolution_mode_to_auto(self) -> None:
+        """Tri-state ``super_resolution_mode`` defaults to ``"auto"`` so the
+        catalogue auto-skip on bright nebulae is honoured."""
+        assert PRESET_QUICK.super_resolution_mode == "auto"
+        assert PRESET_STANDARD.super_resolution_mode == "auto"
+        assert PRESET_QUALITY.super_resolution_mode == "auto"
+
+    def test_all_presets_default_star_separation_mode_to_auto(self) -> None:
+        """Tri-state ``star_separation_mode`` defaults to ``"auto"`` so the
+        catalogue auto-skip on galaxies / clusters is honoured."""
+        assert PRESET_QUICK.star_separation_mode == "auto"
+        assert PRESET_STANDARD.star_separation_mode == "auto"
+        assert PRESET_QUALITY.star_separation_mode == "auto"
+
 
 class TestProcessingProfileConfig:
     """Tests for ProcessingProfileConfig validation."""
@@ -78,7 +102,7 @@ class TestProcessingProfileConfig:
     def test_default_config_is_standard_like(self) -> None:
         """Default config should have sensible defaults matching standard preset."""
         config = ProcessingProfileConfig()
-        assert config.rejection_algorithm == "sigma"
+        assert config.rejection_algorithm == "winsorized"
         assert config.denoise_enabled is True
         assert config.sharpen_enabled is True
 

@@ -14,7 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictException, ErrorCode, NotFoundException
 from app.core.logging import get_logger
-from app.domain.session import AstroSession, InputFormat, SessionCreate, SessionStatus
+from app.domain.session import (
+    AstroSession,
+    InputFormat,
+    SessionCreate,
+    SessionMode,
+    SessionStatus,
+)
 from app.infrastructure.repositories.session_repo import SessionRepository
 from app.infrastructure.storage.file_store import FileStore
 
@@ -93,6 +99,7 @@ class SessionService:
             frame_count_lights=len(frames["lights"]),
             frame_count_darks=len(frames["darks"]),
             frame_count_flats=len(frames["flats"]),
+            frame_count_dark_flats=len(frames.get("dark_flats", [])),
             frame_count_bias=len(frames["bias"]),
             acquired_at=acquired_at,
             capture_metadata=capture_metadata or None,
@@ -106,6 +113,127 @@ class SessionService:
             lights=session.frame_count_lights,
         )
         return created
+
+    async def create_session(
+        self,
+        payload: SessionCreate,
+        owner_id: uuid.UUID | None = None,
+    ) -> AstroSession:
+        """Create a session with no frames yet (live or empty batch).
+
+        Used by the REST API ``POST /sessions`` endpoint when the user
+        starts a live-stacking session from the planner: no frames have
+        been uploaded yet, but we want a persistent record so the
+        worker can stream incremental events to a known session UUID.
+
+        Live sessions enforce a per-owner uniqueness rule: an owner
+        cannot have more than one active live session at any time. The
+        check runs *before* persistence to keep the conflict semantics
+        clean (no orphaned row on rejection).
+
+        Args:
+            payload: Validated :class:`~app.domain.session.SessionCreate`
+                payload from the API. ``inbox_path`` is auto-allocated
+                when missing.
+            owner_id: UUID of the user creating the session. Mandatory
+                for live sessions (uniqueness rule); optional for batch
+                sessions to preserve backwards compatibility with the
+                anonymous/legacy upload flow.
+
+        Returns:
+            The freshly persisted :class:`AstroSession`.
+
+        Raises:
+            ConflictException: When the owner already has an active live
+                session.
+        """
+        from app.core.config import get_settings  # noqa: PLC0415
+
+        if payload.mode == SessionMode.LIVE and owner_id is not None:
+            existing = await self.get_active_live_session(owner_id)
+            if existing is not None:
+                raise ConflictException(
+                    ErrorCode.SESS_ALREADY_PROCESSING,
+                    "A live session is already active for this user.",
+                    details={"active_session_id": str(existing.id)},
+                )
+
+        session_id = uuid.uuid4()
+        settings = get_settings()
+        inbox_path = payload.inbox_path or str(
+            Path(settings.inbox_path) / str(session_id)
+        )
+
+        session = AstroSession(
+            id=session_id,
+            name=payload.name,
+            inbox_path=inbox_path,
+            status=SessionStatus.READY if payload.mode == SessionMode.LIVE else SessionStatus.PENDING,
+            input_format=None,
+            mode=payload.mode.value,
+            owner_id=owner_id,
+            object_name=payload.object_name,
+            target_ra=payload.target_ra,
+            target_dec=payload.target_dec,
+            acquired_at=payload.acquired_at,
+        )
+        created = await self._session_repo.create(session)
+
+        # Pre-create the inbox directory so live frame uploads can write
+        # immediately without a TOCTOU race.
+        Path(inbox_path).mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "session_created_empty",
+            session_id=str(created.id),
+            mode=payload.mode.value,
+            owner_id=str(owner_id) if owner_id else None,
+            name=payload.name,
+        )
+        return created
+
+    async def get_active_live_session(
+        self,
+        owner_id: uuid.UUID,
+    ) -> AstroSession | None:
+        """Return the currently-active live session for ``owner_id`` or None.
+
+        "Active" means: ``mode == LIVE`` AND ``status NOT IN (COMPLETED,
+        FAILED, CANCELLED)``. The most-recently-created match wins if
+        several rows somehow satisfy the predicate (defensive — the
+        creation path enforces uniqueness).
+        """
+        return await self._session_repo.find_active_live_for_owner(owner_id)
+
+    async def terminate_session(
+        self,
+        session_id: uuid.UUID,
+        owner_id: uuid.UUID | None = None,
+    ) -> AstroSession:
+        """Mark a session as completed (used to close a live session).
+
+        When ``owner_id`` is provided the call is rejected (404, to
+        avoid leaking the existence of other users' sessions) if the
+        session belongs to a different owner. Sessions with NULL
+        owner_id are accessible to anyone for backwards compatibility.
+        """
+        session = await self.get_or_404(session_id)
+        if (
+            owner_id is not None
+            and session.owner_id is not None
+            and session.owner_id != owner_id
+        ):
+            raise NotFoundException(
+                ErrorCode.SESS_NOT_FOUND,
+                f"Session '{session_id}' not found.",
+                details={"session_id": str(session_id)},
+            )
+        updated = await self._session_repo.update(
+            session_id,
+            {"status": SessionStatus.COMPLETED.value},
+        )
+        logger.info("session_terminated", session_id=str(session_id))
+        return updated  # type: ignore[return-value]
 
     async def get_or_404(self, session_id: uuid.UUID) -> AstroSession:
         """Retrieve a session by ID or raise a 404 error.
@@ -134,6 +262,7 @@ class SessionService:
         limit: int = 100,
         status: SessionStatus | None = None,
         search: str | None = None,
+        owner_id: uuid.UUID | None = None,
     ) -> list[AstroSession]:
         """List all sessions, optionally filtered by status and/or name.
 
@@ -142,31 +271,41 @@ class SessionService:
             limit: Maximum number of results.
             status: Optional status filter.
             search: Optional name substring filter (case-insensitive).
+            owner_id: When set, restrict the listing to sessions owned
+                by this user. Sessions with NULL owner_id are excluded
+                from the result.
 
         Returns:
             Ordered list of sessions.
         """
         if status is not None:
-            return await self._session_repo.list_by_status(status, offset, limit, search)
-        return await self._session_repo.list_all_ordered(offset, limit, search)
+            return await self._session_repo.list_by_status(
+                status, offset, limit, search, owner_id=owner_id,
+            )
+        return await self._session_repo.list_all_ordered(
+            offset, limit, search, owner_id=owner_id,
+        )
 
     async def count_sessions(
         self,
         status: SessionStatus | None = None,
         search: str | None = None,
+        owner_id: uuid.UUID | None = None,
     ) -> int:
         """Return the total count of sessions matching the given filters.
 
         Args:
             status: Optional status filter.
             search: Optional name substring filter (case-insensitive).
+            owner_id: When set, restrict the count to sessions owned by
+                this user.
 
         Returns:
             Total matching session count.
         """
         if status is not None:
-            return await self._session_repo.count_by_status(status, search)
-        return await self._session_repo.count_all(search)
+            return await self._session_repo.count_by_status(status, search, owner_id=owner_id)
+        return await self._session_repo.count_all(search, owner_id=owner_id)
 
     async def update_plate_solve_result(
         self,

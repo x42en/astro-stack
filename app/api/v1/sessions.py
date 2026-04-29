@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -14,16 +15,34 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.middleware.auth import get_current_user
+from app.api.middleware.auth import (
+    get_current_user,
+    get_optional_user_id,
+    get_user_id_or_mock,
+)
 from app.core.config import get_settings
 from app.core.database import get_async_session
-from app.domain.job import ProfilePreset
-from app.domain.session import AstroSession, InputFormat, SessionRead, SessionStatus
+from app.domain.job import JobRead, ProfilePreset
+from app.domain.session import (
+    AstroSession,
+    InputFormat,
+    SessionCreate,
+    SessionMode,
+    SessionRead,
+    SessionStatus,
+)
 from app.infrastructure.storage.file_store import FileStore
 from app.services.job_service import JobService
 from app.services.session_service import SessionService
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+
+# Centralised whitelist for the ``X-Frame-Type`` header used by the
+# chunked upload and calibration upload endpoints. Keep aligned with the
+# subdir naming conventions in :mod:`app.infrastructure.storage.file_store`.
+ALLOWED_FRAME_TYPES: frozenset[str] = frozenset(
+    {"lights", "darks", "flats", "dark_flats", "bias"}
+)
 
 T = TypeVar("T")
 
@@ -51,26 +70,45 @@ async def list_sessions(
     page_size: int = Query(default=50, ge=1, le=500),
     status: Optional[SessionStatus] = Query(default=None),
     search: Optional[str] = Query(default=None, description="Filter by name substring"),
+    mine: bool = Query(
+        default=False,
+        description=(
+            "When true, restrict the listing to sessions owned by the calling "
+            "user. Sessions with no owner are excluded from this view."
+        ),
+    ),
     db: AsyncSession = Depends(get_async_session),
     _user: Optional[dict] = Depends(get_current_user),
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
 ) -> Any:
-    """List sessions with optional status and name filters.
+    """List sessions with optional status, name and ownership filters.
 
     Args:
         page: Page number (1-based).
         page_size: Number of items per page.
         status: Optional status filter.
         search: Optional name substring filter.
+        mine: When true, only return sessions owned by ``user_id``.
         db: Injected database session.
         _user: Injected auth user (None if auth disabled).
+        user_id: Resolved user UUID for the ``mine`` filter.
 
     Returns:
         :class:`PaginatedResponse` containing a page of sessions.
     """
     service = SessionService(db)
     offset = (page - 1) * page_size
-    sessions = await service.list_sessions(offset=offset, limit=page_size, status=status, search=search)
-    total = await service.count_sessions(status=status, search=search)
+    owner_filter = user_id if mine else None
+    sessions = await service.list_sessions(
+        offset=offset,
+        limit=page_size,
+        status=status,
+        search=search,
+        owner_id=owner_filter,
+    )
+    total = await service.count_sessions(
+        status=status, search=search, owner_id=owner_filter,
+    )
     items = [SessionRead.model_validate(s.model_dump()) for s in sessions]
     return PaginatedResponse(
         items=items,
@@ -131,6 +169,15 @@ async def upload_chunk(
     """
     settings = get_settings()
     service = SessionService(db)
+
+    if x_frame_type not in ALLOWED_FRAME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid X-Frame-Type '{x_frame_type}'. "
+                f"Expected one of: {sorted(ALLOWED_FRAME_TYPES)}."
+            ),
+        )
 
     # Free-form text headers are percent-encoded by the UI to comply with the
     # ISO-8859-1 restriction on HTTP header values (Unicode names, em-dashes,
@@ -225,6 +272,7 @@ async def upload_chunk(
                 "frame_count_lights": len(frames["lights"]),
                 "frame_count_darks": len(frames["darks"]),
                 "frame_count_flats": len(frames["flats"]),
+                "frame_count_dark_flats": len(frames.get("dark_flats", [])),
                 "frame_count_bias": len(frames["bias"]),
                 "input_format": InputFormat(detected_format) if frames["lights"] else None,
                 "status": SessionStatus.READY if len(frames["lights"]) > 0 else SessionStatus.PENDING,
@@ -236,6 +284,53 @@ async def upload_chunk(
         return {"session_id": str(session_uuid), "file_path": str(target_path)}
 
     return {"upload_id": upload_id, "session_id": str(session_uuid)}
+
+
+@router.get(
+    "/live/active",
+    response_model=Optional[SessionRead],
+    summary="Get the calling user's active live session, if any",
+    description=(
+        "Returns the in-progress live session owned by the caller, or "
+        "``null`` (HTTP 200) when none exists. Used by the frontend to "
+        "render a 'Resume session' banner across the app."
+    ),
+)
+async def get_active_live_session_endpoint(
+    db: AsyncSession = Depends(get_async_session),
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
+) -> Optional[SessionRead]:
+    """Return the in-progress live session for the caller (or null)."""
+    if user_id is None:
+        # Anonymous callers cannot own a live session.
+        return None
+    service = SessionService(db)
+    session = await service.get_active_live_session(user_id)
+    if session is None:
+        return None
+    return SessionRead.model_validate(session.model_dump())
+
+
+@router.post(
+    "/{session_id}/terminate",
+    response_model=SessionRead,
+    summary="Terminate a session (mark as completed)",
+    description=(
+        "Transitions the session to ``COMPLETED``. Used by the frontend "
+        "when the user clicks 'Terminer la session' on the live "
+        "workspace, before showing the calibration upload modal. "
+        "Idempotent: terminating an already-completed session is a no-op.\""
+    ),
+)
+async def terminate_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
+) -> SessionRead:
+    """Mark a session as ``COMPLETED`` (closes the live workspace)."""
+    service = SessionService(db)
+    updated = await service.terminate_session(session_id, owner_id=user_id)
+    return SessionRead.model_validate(updated.model_dump())
 
 
 @router.get(
@@ -261,6 +356,35 @@ async def get_session(
     service = SessionService(db)
     session = await service.get_or_404(session_id)
     return SessionRead.model_validate(session.model_dump())
+
+
+@router.get(
+    "/{session_id}/latest-job",
+    response_model=JobRead,
+    summary="Get the most recent job for a session",
+    description=(
+        "Returns the most recently created job for ``session_id`` regardless "
+        "of status (running, completed, cancelled, failed). Used by the UI "
+        "to recover the last render after a server restart or when the "
+        "client-side session→job mapping has been cleared."
+    ),
+)
+async def get_latest_job(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> JobRead:
+    """Return the most recent job for ``session_id`` (404 if none exists)."""
+    job_service = JobService(db)
+    # Ensure the session exists first so we surface a clean 404 path.
+    await SessionService(db).get_or_404(session_id)
+    latest = await job_service.get_latest_job_for_session(session_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No job has ever been started for session '{session_id}'.",
+        )
+    return latest
 
 
 @router.post(
@@ -652,3 +776,342 @@ async def get_light_preview(
 
     await asyncio.to_thread(_generate_light_preview, lights[0], cached)
     return FileResponse(str(cached), media_type="image/jpeg")
+
+
+# ── Session creation (manual / live) ────────────────────────────────────────
+
+
+@router.post(
+    "",
+    response_model=SessionRead,
+    status_code=201,
+    summary="Create an empty session (live or batch)",
+    description=(
+        "Creates a session record with no frames yet. Used by the planner to "
+        "start a live-stacking session for the night's pick. The inbox path is "
+        "auto-allocated when omitted."
+    ),
+)
+async def create_empty_session(
+    payload: SessionCreate,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
+) -> SessionRead:
+    """Persist an empty session and return the freshly created record.
+
+    Live sessions are scoped to the calling user (single-active-live
+    rule); batch sessions accept anonymous callers for backwards
+    compatibility with existing scripts.
+    """
+    if payload.mode == SessionMode.LIVE and user_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication is required to create a live session.",
+        )
+    service = SessionService(db)
+    created = await service.create_session(payload, owner_id=user_id)
+    return SessionRead.model_validate(created.model_dump())
+
+
+# ── Live-stacking endpoints ─────────────────────────────────────────────────
+
+
+_LIVE_FRAME_FILENAME_RE = re.compile(
+    r"^[A-Za-z0-9._\-]{1,200}\.(?:fits?|fts|cr2|cr3|nef|nrw|arw|sr[fr]|dng|raf|rw2|orf|pef|rwl)$",
+    re.IGNORECASE,
+)
+
+
+@router.post(
+    "/{session_id}/live/start",
+    summary="Start (or resume) a live-stacking session",
+)
+async def start_live_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
+) -> dict:
+    """Activate live-stacking for the session.
+
+    Subsequent calls to ``POST /live-frames`` will be merged into the
+    running stack and a preview will be regenerated after each frame.
+    """
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.livestack.service import LiveStackService  # noqa: PLC0415
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    service = SessionService(db)
+    session = await service.get_or_404(session_id)
+
+    if (
+        user_id is not None
+        and session.owner_id is not None
+        and session.owner_id != user_id
+    ):
+        # Hide the existence of other users' sessions.
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    # Single-active-live rule: another session must not already be live.
+    if user_id is not None:
+        active = await service.get_active_live_session(user_id)
+        if active is not None and active.id != session_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A live session is already active for this user.",
+                    "active_session_id": str(active.id),
+                },
+            )
+
+    if session.mode != SessionMode.LIVE.value:
+        await service._session_repo.update(session_id, {"mode": SessionMode.LIVE.value})
+
+    pool = await get_arq_pool()
+    try:
+        repo = LiveStackStateRepository(pool)
+        live_service = LiveStackService(FileStore(), repo)
+        # We don't need the event bus to start (no event emitted).
+        state = await live_service.start(session_id)
+    finally:
+        await pool.aclose()
+    return {"session_id": str(session_id), "is_running": state.is_running}
+
+
+@router.post(
+    "/{session_id}/live/stop",
+    summary="Pause a live-stacking session",
+)
+async def stop_live_session(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
+    """Pause live-stacking. Frames received afterwards are ignored
+    until :func:`start_live_session` is called again."""
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.livestack.service import LiveStackService  # noqa: PLC0415
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    service = SessionService(db)
+    await service.get_or_404(session_id)
+
+    pool = await get_arq_pool()
+    try:
+        repo = LiveStackStateRepository(pool)
+        live_service = LiveStackService(FileStore(), repo)
+        state = await live_service.stop(session_id)
+    finally:
+        await pool.aclose()
+    return {
+        "session_id": str(session_id),
+        "is_running": False if state is None else state.is_running,
+    }
+
+
+@router.post(
+    "/{session_id}/live-frames",
+    status_code=202,
+    summary="Push a single raw frame for live stacking",
+    description=(
+        "Accepts a multipart upload of one frame (FITS or RAW DSLR). "
+        "The frame is written to ``/inbox/{session_id}/lights/`` and an ARQ "
+        "task is enqueued to merge it into the running live stack. Returns "
+        "immediately with HTTP 202; progress is broadcast over the session "
+        "WebSocket via LIVESTACK_FRAME_ACCEPTED / LIVESTACK_PREVIEW_UPDATED."
+    ),
+)
+async def push_live_frame(
+    session_id: uuid.UUID,
+    file: UploadFile = File(..., description="FITS or RAW DSLR frame"),
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
+    """Persist a frame on disk and enqueue its ingestion."""
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+
+    service = SessionService(db)
+    session = await service.get_or_404(session_id)
+
+    raw_name = Path(file.filename or "frame.fits").name
+    if not _LIVE_FRAME_FILENAME_RE.match(raw_name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid filename. Expected alphanumerics + .fits/.cr2/.nef/... "
+                "(max 200 chars)."
+            ),
+        )
+
+    lights_dir = Path(session.inbox_path) / "lights"
+    lights_dir.mkdir(parents=True, exist_ok=True)
+    target = lights_dir / raw_name
+
+    # Stream to disk to keep memory bounded for large RAW files.
+    async with aiofiles.open(target, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            await out.write(chunk)
+
+    # Bump the persistent counter so ``GET /sessions/{id}`` reflects ingest
+    # progress even before the worker picks the task up.
+    await service._session_repo.update(
+        session_id,
+        {"live_frame_count": session.live_frame_count + 1},
+    )
+
+    pool = await get_arq_pool()
+    try:
+        await pool.enqueue_job(
+            "livestack_ingest_frame",
+            str(session_id),
+            str(target),
+        )
+    finally:
+        await pool.aclose()
+
+    return {
+        "session_id": str(session_id),
+        "frame_path": str(target),
+        "queued": True,
+    }
+
+
+@router.get(
+    "/{session_id}/live/state",
+    summary="Get live-stacking state",
+)
+async def get_live_state(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
+    """Return a JSON snapshot of the live-stack state for ``session_id``."""
+    from dataclasses import asdict  # noqa: PLC0415
+
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    service = SessionService(db)
+    await service.get_or_404(session_id)
+
+    pool = await get_arq_pool()
+    try:
+        repo = LiveStackStateRepository(pool)
+        state = await repo.get(str(session_id))
+    finally:
+        await pool.aclose()
+    if state is None:
+        return {
+            "session_id": str(session_id),
+            "is_running": False,
+            "frame_count": 0,
+            "rejected_count": 0,
+            "preview_generation": 0,
+        }
+    payload = asdict(state)
+    if payload["shape"] is not None:
+        payload["shape"] = list(payload["shape"])
+    return payload
+
+
+@router.get(
+    "/{session_id}/live/preview",
+    response_class=FileResponse,
+    summary="Get the current live-stack JPEG preview",
+)
+async def get_live_preview(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> FileResponse:
+    """Serve the current preview JPEG with an ETag derived from the
+    preview generation counter so clients can refresh without polling
+    the file system."""
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    service = SessionService(db)
+    await service.get_or_404(session_id)
+
+    file_store = FileStore()
+    preview = file_store.live_preview_path(session_id)
+    if not preview.exists():
+        raise HTTPException(status_code=404, detail="No live preview yet for this session.")
+
+    etag = "0"
+    pool = await get_arq_pool()
+    try:
+        repo = LiveStackStateRepository(pool)
+        state = await repo.get(str(session_id))
+        if state is not None:
+            etag = str(state.preview_generation)
+    finally:
+        await pool.aclose()
+
+    return FileResponse(
+        str(preview),
+        media_type="image/jpeg",
+        headers={
+            "ETag": f'W/"live-{etag}"',
+            "Cache-Control": "no-cache, must-revalidate",
+        },
+    )
+
+
+@router.get(
+    "/{session_id}/live/recommendations",
+    summary="Get live-stack acquisition recommendations",
+    description=(
+        "Inspects the current accumulator and emits deterministic "
+        "advice about exposure, ISO, white balance and focus. Computed "
+        "on demand — call sparingly (every few frames is plenty)."
+    ),
+)
+async def get_live_recommendations(
+    session_id: uuid.UUID,
+    db: AsyncSession = Depends(get_async_session),
+    _user: Optional[dict] = Depends(get_current_user),
+) -> dict:
+    """Return a :class:`RecommendationReport` as a plain dict."""
+    from dataclasses import asdict  # noqa: PLC0415
+
+    import numpy as np  # noqa: PLC0415
+
+    from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.livestack.recommender import (  # noqa: PLC0415
+        compute_histogram_stats,
+        compute_recommendations,
+    )
+    from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
+
+    service = SessionService(db)
+    await service.get_or_404(session_id)
+
+    pool = await get_arq_pool()
+    try:
+        repo = LiveStackStateRepository(pool)
+        state = await repo.get(str(session_id))
+    finally:
+        await pool.aclose()
+
+    if state is None or state.shape is None or state.accumulator_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No accumulator yet for this session — push at least one "
+                "frame before requesting recommendations."
+            ),
+        )
+
+    # Memory-map the accumulator read-only so we never copy a full RGB
+    # image just to compute medians.
+    accumulator = np.memmap(
+        state.accumulator_path,
+        dtype=np.float32,
+        mode="r",
+        shape=tuple(state.shape),
+    )
+
+    stats = compute_histogram_stats(np.asarray(accumulator), last_fwhm=state.last_fwhm)
+    report = compute_recommendations(stats)
+    return asdict(report)

@@ -1,10 +1,14 @@
 # =============================================================================
 # Astro-Stack — Multi-stage Docker build
-# Base: NVIDIA CUDA 12.6.3 + cuDNN + Ubuntu 24.04
+# Base: NVIDIA CUDA 12.8.1 + cuDNN 9 + Ubuntu 24.04
+# Aligned with host driver (≥ 570.x announces CUDA 12.8). CUDA guarantees
+# forward compatibility within the 12.x major, but matching base/runtime/driver
+# eliminates a variable when diagnosing GPU init failures (notably
+# `cudaSetDevice ... initialization error` from ORT 1.25 + CUDA fork).
 # =============================================================================
 
 # ── Stage 1: System dependencies & build tools ─────────────────────────────
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS system-base
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 AS system-base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=UTC \
@@ -91,10 +95,11 @@ RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install PyTorch with CUDA support (large download, cached separately)
+# cu128 wheels match the 12.8.1 base above. PyTorch 2.7+ ships cu128 builds.
 RUN pip install --upgrade pip setuptools wheel \
     && pip install \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu126
+        --index-url https://download.pytorch.org/whl/cu128
 
 # Install all application dependencies BEFORE copying source
 # This ensures a clean, reproducible pip install
@@ -108,6 +113,8 @@ RUN pip install \
         httpx astropy astroquery rawpy numpy Pillow ExifRead \
         skyfield timezonefinder \
         watchdog python-multipart aiofiles anyio structlog \
+        # Live-stacking pipeline (frame alignment + hot-pixel rejection)
+        astroalign scipy \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
 
@@ -222,7 +229,15 @@ RUN set -eu; \
 
 # venv is already present (FROM ai-tools), just set PATH
 ENV PATH="/opt/venv/bin:$PATH" \
-    QT_QPA_PLATFORM=offscreen
+    QT_QPA_PLATFORM=offscreen \
+    XDG_DATA_HOME=/models
+# XDG_DATA_HOME=/models — GraXpert (via appdirs.user_data_dir("GraXpert")) reads
+# its model bundles from $XDG_DATA_HOME/GraXpert/{bge,denoise,deconvolution-*}-ai-models.
+# Without this override appdirs falls back to /root/.local/share/GraXpert/ where
+# only models GraXpert downloaded itself at runtime would live — bge / deconv-*
+# bundles populated by scripts/init-models.sh into the /models volume would be
+# silently invisible, forcing GraXpert to re-download them on every fresh
+# container or (worse) skip the AI step entirely.
 # Note: PYTHONPATH must NOT be set to /app here — it would shadow the installed
 # alembic package with /app/alembic/ (our migrations dir) causing ImportError.
 # The editable install (pip install -e .) creates a .pth file in site-packages

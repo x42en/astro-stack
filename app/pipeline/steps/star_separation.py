@@ -132,8 +132,16 @@ async def _recombine(
     with fits.open(str(stars_path)) as hdul:
         stars_data = hdul[0].data.astype(np.float32)
 
-    combined = np.clip(nebula_data * nebula_weight + stars_data * star_weight, 0, None)
-    combined = (combined / combined.max() * 65535).astype(np.float32)
+    # Blend the two layers, then preserve the original ``stars_data`` dynamic
+    # range.  The previous formula renormalised against ``combined.max()``,
+    # which crushed the wings whenever the input had a saturated core (the
+    # bright peak dominated the divisor and dragged everything else toward
+    # zero — see M42 regression notes).  Clipping to the input envelope
+    # instead keeps the wings intact while still bounding bright peaks.
+    in_min = float(np.nanmin(stars_data))
+    in_max = float(np.nanmax(stars_data))
+    blended = nebula_data * nebula_weight + stars_data * star_weight
+    combined = np.clip(blended, in_min, in_max).astype(np.float32)
 
     output_path = output_dir / "recombined.fits"
     hdu = fits.PrimaryHDU(data=combined, header=header)

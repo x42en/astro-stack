@@ -143,38 +143,63 @@ class TestSirilScriptBuilder:
         reg_idx = next(i for i, c in enumerate(commands) if c.startswith("register"))
         assert commands[reg_idx + 1].startswith("seqapplyreg")
 
-    def test_setfindstar_runs_immediately_before_register(
+    def test_setfindstar_runs_immediately_before_register_when_overridden(
         self,
         standard_config: ProcessingProfileConfig,
         minimal_frames: dict,
     ) -> None:
-        """``setfindstar`` must be tuned right before ``register -2pass``.
+        """``setfindstar`` must be tuned right before ``register -2pass``
+        when ``findstar_override_enabled`` is True.
 
-        Wide-field DSLR shots produce bloated stars (FWHM 10–20 px) that the
-        Siril defaults reject. The tuning command pair must appear immediately
-        before ``register`` so the new thresholds apply to that registration
-        pass (and a ``reset`` first to avoid stacking deltas across runs).
+        Default behaviour (override disabled) leaves Siril's built-in
+        detector alone — relaxing it smears nebular chrominance during the
+        stack (verified on M42).  Wide-field DSLR rigs that need looser
+        values can opt-in via the profile flag.
         """
-        builder = SirilScriptBuilder(standard_config, minimal_frames, Path("/work"))
+        cfg = standard_config.model_copy(
+            update={
+                "findstar_override_enabled": True,
+                "findstar_radius": 20,
+                "findstar_sigma": 0.5,
+                "findstar_roundness": 0.3,
+                "findstar_relax": True,
+            }
+        )
+        builder = SirilScriptBuilder(cfg, minimal_frames, Path("/work"))
         commands = builder.build_preprocessing_commands()
         reg_idx = next(i for i, c in enumerate(commands) if c.startswith("register"))
         # The two preceding commands must be the setfindstar tuning pair.
         assert commands[reg_idx - 2] == "setfindstar reset"
         tune = commands[reg_idx - 1]
         assert tune.startswith("setfindstar")
-        # Wide-field defaults: looser radius/sigma/roundness + relax mode.
+        # Profile-driven values are reflected verbatim in the command.
         assert "-radius=20" in tune
-        assert "-sigma=0.5" in tune
-        assert "-roundness=0.3" in tune
+        assert "-sigma=0.50" in tune
+        assert "-roundness=0.30" in tune
         assert "-relax=on" in tune
 
-    def test_setfindstar_appears_exactly_once(
+    def test_setfindstar_absent_by_default(
+        self,
+        standard_config: ProcessingProfileConfig,
+        minimal_frames: dict,
+    ) -> None:
+        """No ``setfindstar`` command should be emitted with the default
+        profile — Siril's built-in detector preserves nebular chrominance
+        better than any relaxed override."""
+        builder = SirilScriptBuilder(standard_config, minimal_frames, Path("/work"))
+        commands = builder.build_preprocessing_commands()
+        assert not any(c.startswith("setfindstar") for c in commands)
+
+    def test_setfindstar_appears_exactly_once_when_overridden(
         self,
         standard_config: ProcessingProfileConfig,
         minimal_frames: dict,
     ) -> None:
         """Only one tuning pair should be emitted per preprocessing run."""
-        builder = SirilScriptBuilder(standard_config, minimal_frames, Path("/work"))
+        cfg = standard_config.model_copy(
+            update={"findstar_override_enabled": True}
+        )
+        builder = SirilScriptBuilder(cfg, minimal_frames, Path("/work"))
         commands = builder.build_preprocessing_commands()
         tunes = [c for c in commands if c.startswith("setfindstar -")]
         resets = [c for c in commands if c == "setfindstar reset"]
