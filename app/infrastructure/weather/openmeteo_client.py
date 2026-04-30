@@ -300,17 +300,27 @@ def _parse_forecast(payload: dict[str, Any]) -> WeatherForecast:
     dew: list[float] = hourly_raw.get("dew_point_2m") or []
     wind: list[float] = hourly_raw.get("wind_speed_10m") or []
 
+    def _sf(seq: list, idx: int, default: float = 0.0) -> float:
+        """Return ``float(seq[idx])`` or *default* when out-of-bounds or None.
+
+        Open-Meteo returns ``null`` for incomplete hourly slots at the tail of
+        a 16-day forecast (the model hasn't produced data for those hours yet).
+        Using ``float(None)`` raises ``TypeError``, so we guard every access.
+        """
+        v = seq[idx] if idx < len(seq) else None
+        return float(v) if v is not None else default
+
     hourly: list[HourlyWeather] = []
     for i, t in enumerate(times):
         hourly.append(
             HourlyWeather(
                 time=_parse_dt_required(t, local_tz),
-                cloud_cover_pct=float(cloud[i] if i < len(cloud) else 0.0),
-                cloud_cover_low_pct=float(cloud_low[i] if i < len(cloud_low) else 0.0),
-                visibility_m=float(vis[i] if i < len(vis) else 0.0),
-                relative_humidity_pct=float(rh[i] if i < len(rh) else 0.0),
-                dew_point_c=float(dew[i] if i < len(dew) else 0.0),
-                wind_speed_kmh=float(wind[i] if i < len(wind) else 0.0),
+                cloud_cover_pct=_sf(cloud, i),
+                cloud_cover_low_pct=_sf(cloud_low, i),
+                visibility_m=_sf(vis, i),
+                relative_humidity_pct=_sf(rh, i),
+                dew_point_c=_sf(dew, i),
+                wind_speed_kmh=_sf(wind, i),
             )
         )
 
@@ -331,7 +341,7 @@ def _parse_forecast(payload: dict[str, Any]) -> WeatherForecast:
                 sunset=_parse_dt_required(sunset[i], local_tz),
                 moonrise=_parse_dt(moonrise[i] if i < len(moonrise) else None, local_tz),
                 moonset=_parse_dt(moonset[i] if i < len(moonset) else None, local_tz),
-                moon_phase=float(moon_phase[i] if i < len(moon_phase) else 0.0),
+                moon_phase=float(moon_phase[i]) if i < len(moon_phase) and moon_phase[i] is not None else 0.0,
             )
         )
 

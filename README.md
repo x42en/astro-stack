@@ -68,43 +68,42 @@ repository.
   error, completed) bridged via a Redis pub/sub event bus.
 - **File watcher** — auto-detects newly deposited sessions in the inbox and
   triggers ingestion after a configurable stability delay.
-- **Optional JWT authentication** — disabled by default; activate with
-  `AUTH_ENABLED=true`.
+- **OAuth 2.1 / OIDC authentication** — three modes controlled by `AUTH_MODE`:
+  `disabled` (dev default), `mock` (staging, HS256 + `X-Mock-User` header) and
+  `oidc` (production). In `oidc` mode every request is validated against RS256
+  JWTs issued by [AuthService](https://auth.astromote.com). The JWKS endpoint is
+  cached with a configurable TTL and refreshed automatically on key rotation.
+  WebSocket connections authenticate via a short-lived Redis ticket obtained from
+  `POST /api/v1/auth/ws-ticket`.
 
 ---
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────┐
-│  Traefik Reverse Proxy (ports 80/443)                │
-│    - Let's Encrypt TLS auto-configuration            │
-│    - Security headers (HSTS, X-Frame-Options)        │
-│    - Gzip compression                                │
-└────────────────────────┬─────────────────────────────┘
-                         │
-┌────────────────────────▼─────────────────────────────┐
-│  astro-api (FastAPI + Uvicorn + Watchdog)            │
-│    - REST API   /api/v1/*                            │
-│    - WebSocket  /ws/jobs/{id}, /ws/sessions/{id}     │
-│    - File watcher → session auto-detection           │
-└────────────────────────┬─────────────────────────────┘
-                         │ enqueue
-                    ┌────▼──────┐
-                    │  Redis 7  │ ← ARQ queue + pub/sub event bus
-                    └────┬──────┘
-              ┌──────────┴──────────┐
-    ┌─────────▼──────┐    ┌─────────▼──────┐
-    │ astro-worker   │    │ astro-worker   │
-    │   GPU 0        │    │   GPU 1        │
-    │  (ARQ + orch.) │    │  (ARQ + orch.) │
-    └────────────────┘    └────────────────┘
-                         │
-              ┌──────────▼──────────┐
-              │     PostgreSQL      │
-              │  sessions / jobs /  │
-              │  steps / profiles   │
-              └─────────────────────┘
+```mermaid
+flowchart TD
+    UI(["AstroUI (React SPA)"])
+    AUTH(["AuthService\nauth.astromote.com\nOIDC · OAuth 2.1 · PKCE"])
+    TRAEFIK["Traefik\nTLS termination · HSTS · gzip\nports 80 / 443"]
+    API["astro-api\nFastAPI · Uvicorn · Watchdog\nREST /api/v1/* · WS /ws/*"]
+    REDIS[("Redis 7\nARQ job queue · pub/sub")]
+    W0["astro-worker GPU 0\nARQ · pipeline orchestration"]
+    W1["astro-worker GPU 1\nARQ · pipeline orchestration"]
+    PG[("PostgreSQL\nsessions · jobs · steps · profiles")]
+
+    UI -->|HTTPS| TRAEFIK
+    TRAEFIK -->|reverse proxy| API
+    UI -- "OIDC redirect + PKCE" --> AUTH
+    AUTH -- "RS256 access token" --> UI
+    API -- "JWKS fetch · RS256 validation" --> AUTH
+    API -->|enqueue| REDIS
+    REDIS -->|dequeue| W0
+    REDIS -->|dequeue| W1
+    W0 <-->|pub/sub events| REDIS
+    W1 <-->|pub/sub events| REDIS
+    API <-->|read / write| PG
+    W0 <-->|read / write| PG
+    W1 <-->|read / write| PG
 ```
 
 ### Pipeline steps
@@ -183,8 +182,11 @@ See `.env.example` for the full list. Key variables:
 | `MODELS_PATH`             | `/models`                  | AI model weights directory                  |
 | `PIPELINE_MAX_RETRIES`    | `3`                        | Default max retry count per step            |
 | `SESSION_STABILITY_DELAY` | `30.0`                     | Seconds before a session is considered stable |
-| `AUTH_ENABLED`            | `false`                    | Enable JWT authentication                   |
-| `JWT_SECRET`              | (required if auth enabled) | HMAC signing secret                         |
+| `AUTH_MODE`               | `disabled`                 | Auth mode: `disabled`, `mock`, or `oidc`    |
+| `OIDC_ISSUER`             | *(required in oidc mode)*  | OIDC issuer URL (e.g. `https://auth.astromote.com`) |
+| `OIDC_AUDIENCE`           | `astrostack`               | Expected JWT `aud` claim                    |
+| `OIDC_JWKS_CACHE_TTL_SECONDS` | `300`                  | JWKS public-key cache TTL in seconds        |
+| `CORS_ALLOWED_ORIGINS`    | `http://localhost:5173`    | Comma-separated list of allowed CORS origins |
 
 ---
 
@@ -258,8 +260,10 @@ ws.onmessage = (e) => {
 };
 ```
 
-When `AUTH_ENABLED=true`, pass the JWT as `Authorization: Bearer <token>`
-on REST calls and as `?token=<token>` on the WebSocket URL.
+When `AUTH_MODE=oidc`, pass the access token as `Authorization: Bearer <token>`
+on REST calls. For WebSocket connections, first obtain a short-lived ticket with
+`POST /api/v1/auth/ws-ticket` (authenticated REST call), then append it as
+`?ticket=<ticket>` to the WebSocket URL.
 
 ---
 
@@ -268,17 +272,16 @@ on REST calls and as `?token=<token>` on the WebSocket URL.
 The following items are planned but not yet implemented. They are listed in
 priority order; the order may change based on feedback.
 
-1. **Authentication** via [auth-service](https://github.com/circle-rd/auth-service).
-2. **Planet-dedicated processing pipeline** with lucky-imaging support.
-3. **Observation time-slot suggestions** after selecting a celestial object and
+1. **Planet-dedicated processing pipeline** with lucky-imaging support.
+2. **Observation time-slot suggestions** after selecting a celestial object and
    a location.
-4. **AI-driven session scheduling** and observation recommendations based on
+3. **AI-driven session scheduling** and observation recommendations based on
    weather forecast, location, and target.
-5. **Pipeline tools and steps exposed as MCP servers** so external agents can
+4. **Pipeline tools and steps exposed as MCP servers** so external agents can
    compose them.
-6. **AI-driven pipeline auto-selection and auto-improve** through agent
+5. **AI-driven pipeline auto-selection and auto-improve** through agent
    workflows.
-7. **Observation alerts** (cancel reminders for cloudy nights, favourite-target
+6. **Observation alerts** (cancel reminders for cloudy nights, favourite-target
    visibility windows, etc.).
 
 ---

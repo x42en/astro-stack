@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.middleware.auth import prefetch_jwks
 from app.api.middleware.error_handler import register_error_handlers
+from app.api.v1.admin_gallery import router as admin_gallery_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.catalog import router as catalog_router
 from app.api.v1.gallery import router as gallery_router
@@ -24,6 +25,7 @@ from app.api.v1.me_sites import router as me_sites_router
 from app.api.v1.planning import router as planning_router
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.sessions import router as sessions_router
+from app.api.v1.settings import router as settings_router
 from app.api.v1.ws.manager import WebSocketConnectionManager
 from app.api.v1.ws.router import router as ws_router
 from app.core.config import get_settings
@@ -166,6 +168,7 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     # ── API routers ───────────────────────────────────────────────────────────
+    app.include_router(admin_gallery_router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(sessions_router, prefix="/api/v1")
     app.include_router(jobs_router, prefix="/api/v1")
@@ -175,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(me_sites_router, prefix="/api/v1")
     app.include_router(me_followed_router, prefix="/api/v1")
     app.include_router(planning_router, prefix="/api/v1")
+    app.include_router(settings_router, prefix="/api/v1")
     app.include_router(ws_router)
 
     # ── Health check ──────────────────────────────────────────────────────────
