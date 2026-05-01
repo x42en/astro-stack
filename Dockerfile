@@ -189,7 +189,7 @@ RUN CC_RELEASE="https://github.com/setiastro/cosmicclarity/releases/download/Lin
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models
 # We need to fetch the s3_secrets.py file which contains credentials/endpoint
-RUN pip install graxpert \
+RUN pip install graxpert[cuda] \
     || ( \
         git clone --depth=1 https://github.com/Steffenhir/GraXpert.git /opt/graxpert && \
         pip install -r /opt/graxpert/requirements.txt && \

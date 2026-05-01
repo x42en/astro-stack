@@ -24,7 +24,7 @@ repository.
 | Pipeline tooling | Siril 1.4 (headless), ASTAP, GraXpert, Cosmic Clarity (CUDA) |
 | RAW handling | rawpy / LibRaw, ExifRead |
 | Real-time events | WebSocket + Redis pub/sub |
-| Container runtime | NVIDIA CUDA 12.6.3 + cuDNN base image |
+| Container runtime | NVIDIA CUDA 12.8.1 + cuDNN base image |
 
 ---
 
