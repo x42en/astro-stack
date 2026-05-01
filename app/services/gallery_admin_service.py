@@ -137,13 +137,11 @@ class GalleryAdminService:
         Returns:
             A populated :class:`GalleryStats` instance.
         """
-        total, unique, by_format, over_time, top = await _gather(
-            self._repo.count_total(),
-            self._repo.count_unique_emails(),
-            self._repo.count_by_format(),
-            self._repo.downloads_over_time(days=days),
-            self._repo.top_sessions(limit=10),
-        )
+        total = await self._repo.count_total()
+        unique = await self._repo.count_unique_emails()
+        by_format = await self._repo.count_by_format()
+        over_time = await self._repo.downloads_over_time(days=days)
+        top = await self._repo.top_sessions(limit=10)
 
         return GalleryStats(
             total_downloads=total,
@@ -199,19 +197,4 @@ class GalleryAdminService:
         )
 
 
-# ── Async gather helper ────────────────────────────────────────────────────────
 
-
-import asyncio  # noqa: E402 — kept at bottom to match project import ordering
-
-
-async def _gather(*coros):  # type: ignore[no-untyped-def]
-    """Await multiple coroutines concurrently and return results in order.
-
-    Args:
-        *coros: Awaitable coroutines to run concurrently.
-
-    Returns:
-        Tuple of resolved values in the same order as *coros*.
-    """
-    return await asyncio.gather(*coros)

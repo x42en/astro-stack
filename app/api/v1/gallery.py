@@ -191,7 +191,13 @@ async def request_download(
         fmt=body.format,
         requester_ip=client_ip,
     )
-    base = str(request.base_url).rstrip("/")
+    # Respect the X-Forwarded-Proto header set by the reverse proxy (Traefik).
+    # Without this, request.base_url uses the internal HTTP scheme even when
+    # the client is on HTTPS, producing an http:// URL that Chrome blocks as
+    # Mixed Content.
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.url.netloc
+    base = f"{proto}://{host}"
     url = (
         f"{base}/api/v1/gallery/{session_id}/download"
         f"?token={token}&format={body.format}"
