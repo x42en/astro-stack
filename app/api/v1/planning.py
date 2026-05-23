@@ -6,16 +6,16 @@ flow on the marketing landing page works without sign-in.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
-from datetime import datetime, timedelta
-from datetime import timezone as timezone_module
-from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
 
 from app.core.config import get_settings
+from app.core.errors import ErrorCode, NotFoundException
 from app.domain.visibility import ObjectForecast, ObjectVisibility, ObservationWindow
+from app.infrastructure.catalog.registry import lookup_object
 from app.infrastructure.weather.cache import (
     WeatherCache,
     geocode_cache_key,
@@ -26,6 +26,7 @@ from app.infrastructure.weather.openmeteo_client import (
     OpenMeteoClient,
     WeatherForecast,
 )
+from app.services.object_thumbnail_service import ObjectThumbnailService
 from app.services.planner_service import PlannerService
 
 router = APIRouter(prefix="/planning", tags=["planning"])
@@ -34,9 +35,10 @@ router = APIRouter(prefix="/planning", tags=["planning"])
 # ── Singletons (module-scoped lazy) ──────────────────────────────────────────
 
 
-_client: Optional[OpenMeteoClient] = None
-_cache: Optional[WeatherCache] = None
-_planner: Optional[PlannerService] = None
+_client: OpenMeteoClient | None = None
+_cache: WeatherCache | None = None
+_planner: PlannerService | None = None
+_thumbnails: ObjectThumbnailService | None = None
 
 
 def get_client() -> OpenMeteoClient:
@@ -63,6 +65,14 @@ def get_planner() -> PlannerService:
     return _planner
 
 
+def get_thumbnails() -> ObjectThumbnailService:
+    """FastAPI dependency: shared :class:`ObjectThumbnailService`."""
+    global _thumbnails
+    if _thumbnails is None:
+        _thumbnails = ObjectThumbnailService()
+    return _thumbnails
+
+
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 
@@ -78,7 +88,7 @@ class RecommendationBundle(BaseModel):
     """Combined night-window + weather + ranked recommendations payload."""
 
     window: ObservationWindow
-    weather_summary: Optional[WeatherSummary] = None
+    weather_summary: WeatherSummary | None = None
     recommendations: list[ObjectVisibility]
 
 
@@ -86,7 +96,7 @@ class RecommendationBundle(BaseModel):
 
 
 def _validate_date(value: date_type) -> date_type:
-    today = datetime.now(timezone_module.utc).date()
+    today = datetime.now(UTC).date()
     earliest = today - timedelta(days=1)
     latest = today + timedelta(days=15)
     if value < earliest or value > latest:
@@ -106,7 +116,7 @@ async def _summarise_weather(
     lon: float,
     day: date_type,
     window: ObservationWindow,
-) -> Optional[WeatherSummary]:
+) -> WeatherSummary | None:
     cache_key = weather_cache_key(lat, lon, day)
     payload = await cache.get_json(cache_key)
     if payload is None:
@@ -246,7 +256,7 @@ async def get_object_forecast(
     lat: float = Query(..., ge=-90.0, le=90.0),
     lon: float = Query(..., ge=-180.0, le=180.0),
     elevation: float = Query(0.0, ge=-500.0, le=9000.0),
-    start_date: Optional[date_type] = Query(None, description="Defaults to today (UTC)."),
+    start_date: date_type | None = Query(None, description="Defaults to today (UTC)."),
     days: int = Query(90, ge=1, le=365),
     min_altitude: float = Query(30.0, ge=0.0, le=89.0),
     timezone: str = Query("UTC", max_length=64),
@@ -261,7 +271,7 @@ async def get_object_forecast(
     (no weather) and is cached for one day per (object, site, horizon).
     """
     if start_date is None:
-        start_date = datetime.now(timezone_module.utc).date()
+        start_date = datetime.now(UTC).date()
 
     cache_key = (
         f"objfc:{catalog_id}:{lat:.4f}:{lon:.4f}:{elevation:.0f}:"
@@ -283,3 +293,43 @@ async def get_object_forecast(
     )
     await cache.set_json(cache_key, forecast.model_dump(mode="json"), 24 * 3600)
     return forecast
+
+
+@router.get("/object/{catalog_id}/thumbnail")
+async def get_object_thumbnail(
+    catalog_id: str,
+    thumbnails: ObjectThumbnailService = Depends(get_thumbnails),
+) -> Response:
+    """Return a preview image for one catalog object.
+
+    Resolution cascade (handled by :class:`ObjectThumbnailService`):
+
+    1. Wikipedia REST summary thumbnail (color photo when available).
+    2. CDS HiPS2FITS DSS2 color cutout from the object's RA/Dec.
+    3. ``404`` when neither source delivers an image — the front-end then
+       renders a coloured placeholder.
+
+    Results are cached in-memory (LRU) for the lifetime of the process.
+    """
+    obj = lookup_object(catalog_id)
+    if obj is None:
+        raise NotFoundException(
+            ErrorCode.PLAN_OBJECT_NOT_FOUND,
+            f"Unknown catalog object: {catalog_id!r}",
+            details={"catalog_id": catalog_id},
+        )
+    result = await thumbnails.fetch(obj.id, obj.name, obj.ra_deg, obj.dec_deg)
+    if result is None:
+        raise NotFoundException(
+            ErrorCode.PLAN_OBJECT_NOT_FOUND,
+            f"No thumbnail available for {obj.id!r}",
+            details={"catalog_id": obj.id},
+        )
+    return Response(
+        content=result.data,
+        media_type=result.content_type,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Thumbnail-Source": result.source,
+        },
+    )
