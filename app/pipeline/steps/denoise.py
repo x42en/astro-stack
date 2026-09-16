@@ -124,6 +124,7 @@ class DenoiseStep(PipelineStep):
                 output_path=output_path,
                 strength=strength,
                 luminance_only=luminance_only,
+                aberration_first=bool(config.get("denoise_aberration_first", False)),
             )
             engine_label = "Cosmic Clarity"
 

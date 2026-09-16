@@ -70,6 +70,7 @@ class SharpenStep(PipelineStep):
             stellar_amount=float(config.get("sharpen_stellar_amount", 0.5)),
             nonstellar_amount=float(config.get("sharpen_nonstellar_amount", 0.7)),
             nonstellar_strength=float(config.get("sharpen_radius", 3.0)),
+            aberration_first=bool(config.get("sharpen_aberration_first", False)),
         )
 
         context.sharpened_path = output_path

@@ -115,6 +115,7 @@ PIPELINE_STEP_PLAN: tuple[tuple[str, str], ...] = (
     ("sharpen", "AI Sharpening / Deconvolution (Cosmic Clarity)"),
     ("super_resolution", "AI Super-Resolution 2× (Cosmic Clarity)"),
     ("star_separation", "Star Separation (Cosmic Clarity Dark Star)"),
+    ("satellite_removal", "Satellite Trail Removal (Cosmic Clarity)"),
     ("export", "Export (FITS / TIFF / JPEG / Thumbnail)"),
 )
 
@@ -180,6 +181,7 @@ class PipelineOrchestrator:
         "denoise": "denoised_path",
         "sharpen": "sharpened_path",
         "super_resolution": "superres_path",
+        "satellite_removal": "satellite_removed_path",
     }
 
     async def _maybe_generate_step_preview(
@@ -564,6 +566,7 @@ class PipelineOrchestrator:
         from app.pipeline.steps.sharpen import SharpenStep  # noqa: PLC0415
         from app.pipeline.steps.super_resolution import SuperResolutionStep  # noqa: PLC0415
         from app.pipeline.steps.star_separation import StarSeparationStep  # noqa: PLC0415
+        from app.pipeline.steps.satellite_removal import SatelliteRemovalStep  # noqa: PLC0415
         from app.pipeline.steps.export import ExportStep  # noqa: PLC0415
         from app.pipeline.adapters.cosmic_adapter import CosmicClarityAdapter  # noqa: PLC0415
         from app.pipeline.adapters.graxpert_adapter import GraXpertAdapter  # noqa: PLC0415
@@ -581,6 +584,7 @@ class PipelineOrchestrator:
             SharpenStep(adapter=cosmic_adapter),
             SuperResolutionStep(adapter=cosmic_adapter),
             StarSeparationStep(adapter=cosmic_adapter),
+            SatelliteRemovalStep(adapter=cosmic_adapter),
             ExportStep(),
         ]
 

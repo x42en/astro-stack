@@ -41,48 +41,14 @@ class ModelDescriptor:
 
 # ── Known model definitions ───────────────────────────────────────────────────
 
-COSMIC_CLARITY_MODELS: list[ModelDescriptor] = [
-    ModelDescriptor(
-        name="Cosmic Clarity Denoise (standard)",
-        filename="denoise_cnn.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Denoise (deep)",
-        filename="deep_denoise_cnn.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Sharpen stellar",
-        filename="deep_sharp_stellar_cnn.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Sharpen non-stellar r1",
-        filename="deep_nonstellar_sharp_cnn_radius_1.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Sharpen non-stellar r2",
-        filename="deep_nonstellar_sharp_cnn_radius_2.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Sharpen non-stellar r4",
-        filename="deep_nonstellar_sharp_cnn_radius_4.pth",
-        required=True,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Satellite Removal",
-        filename="satelliteremoval128featuremaps.pth",
-        required=False,
-    ),
-    ModelDescriptor(
-        name="Cosmic Clarity Dark Star",
-        filename="darkstar_model.pth",
-        required=False,
-    ),
-]
+# Cosmic Clarity model weights used to be provisioned into this /models volume
+# by init-models.sh (old setiastro/cosmicclarity script bundle, archived
+# 2026-09-16). SASpro (github.com/setiastro/setiastrosuitepro), which now
+# provides these engines via the `cosmicclarity` CLI, manages its own model
+# weights and is not pointed at our /models volume — so there is nothing to
+# verify here anymore. Kept as an empty list (rather than deleted) so the
+# `ALL_MODELS` composition below doesn't need touching if this is revisited.
+COSMIC_CLARITY_MODELS: list[ModelDescriptor] = []
 
 GRAXPERT_MODELS: list[ModelDescriptor] = [
     # GraXpert 3.x stores ONNX weights under

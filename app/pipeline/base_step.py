@@ -57,6 +57,7 @@ class PipelineContext:
     sharpened_path: Optional[Path] = None
     superres_path: Optional[Path] = None
     nebula_only_path: Optional[Path] = None
+    satellite_removed_path: Optional[Path] = None
     final_fits_path: Optional[Path] = None
 
 

@@ -465,74 +465,37 @@ def check_astap() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Section 6 -- Cosmic Clarity
+# Section 6 -- Cosmic Clarity (via SetiAstroSuitePro)
 # ---------------------------------------------------------------------------
 
 
 def check_cosmic_clarity() -> None:
-    print(_section("6  Cosmic Clarity (SetiAstro)"))
+    print(_section("6  Cosmic Clarity engines (SetiAstroSuitePro `cosmicclarity` CLI)"))
 
-    base = Path("/opt/cosmic-clarity")
-    if not base.exists():
-        print(_fail(f"{base} directory missing"))
-        report.add("cosmic:dir", Level.CRITICAL, "missing")
+    binary = shutil.which(os.environ.get("COSMIC_CLARITY_CLI", "cosmicclarity"))
+    if binary is None:
+        print(_fail("cosmicclarity CLI not found on PATH — is setiastrosuitepro installed?"))
+        report.add("cosmic:cli", Level.CRITICAL, "missing")
         return
 
-    report.add("cosmic:dir", Level.OK)
-    scripts: dict[str, Path] = {
-        "denoise":          base / "setiastrocosmicclarity_denoise.py",
-        "sharpen":          base / "SetiAstroCosmicClarity.py",
-        "super_resolution": base / "SetiAstroCosmicClarity_SuperRes.py",
-        "star_removal":     base / "setiastrocosmicclarity_darkstar.py",
-    }
+    print(_ok(f"cosmicclarity CLI found: {binary}"))
+    report.add("cosmic:cli", Level.OK, binary)
 
-    for name, path in scripts.items():
-        if path.exists():
-            print(_ok(f"  {name}: {path.name}"))
-            report.add(f"cosmic:script:{name}", Level.OK)
+    # Dark Star (star removal) is NOT among the modes documented at
+    # https://github.com/setiastro/setiastrosuitepro/wiki/CLI:-Command-Line-Interface
+    # ("darkstar" below is a best-effort guess — see cosmic_adapter.py note).
+    modes = ["denoise", "sharpen", "both", "superres", "satellite", "darkstar"]
+    for mode in modes:
+        rc, stdout, stderr = _run_cmd([binary, mode, "--help"], timeout=20)
+        if rc == 0:
+            print(_ok(f"  {mode}: --help OK"))
+            report.add(f"cosmic:mode:{mode}", Level.OK)
+        elif mode == "darkstar":
+            print(_warn(f"  {mode}: --help failed (rc={rc}) — unconfirmed CLI mode, see Phase 0 notes"))
+            report.add(f"cosmic:mode:{mode}", Level.WARNING, f"rc={rc}")
         else:
-            print(_fail(f"  {name}: {path.name}  NOT FOUND"))
-            report.add(f"cosmic:script:{name}", Level.CRITICAL, "missing")
-
-    # Probe the imports inside the denoise script without actually running it.
-    # We parse the file with ast, extract only the import statements, and exec
-    # them in an isolated namespace so we catch ImportError without side-effects.
-    denoise = scripts["denoise"]
-    if not denoise.exists():
-        return
-
-    print(_info("  Probing denoise script imports..."))
-    probe_code = textwrap.dedent(f"""\
-        import ast, sys, types
-        with open({str(denoise)!r}) as f:
-            src = f.read()
-        tree = ast.parse(src)
-        import_nodes = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
-        mod = types.ModuleType('_probe')
-        try:
-            exec(
-                compile(ast.Module(body=import_nodes, type_ignores=[]), '<probe>', 'exec'),
-                mod.__dict__,
-            )
-            print('IMPORTS_OK')
-        except ImportError as e:
-            print(f'IMPORT_ERROR:{{e}}')
-        except Exception as e:
-            print(f'OTHER_ERROR:{{e}}')
-    """)
-    rc, stdout, stderr = _run_cmd([sys.executable, "-c", probe_code], timeout=20)
-    output = (stdout + stderr).strip()
-
-    if "IMPORTS_OK" in output:
-        print(_ok("  All denoise script imports satisfied"))
-        report.add("cosmic:imports", Level.OK)
-    elif "IMPORT_ERROR" in output:
-        err = output.replace("IMPORT_ERROR:", "")
-        print(_fail(f"  Import error in denoise script: {err}"))
-        report.add("cosmic:imports", Level.CRITICAL, err[:120])
-    else:
-        print(_warn(f"  Import probe inconclusive: {output[:120]}"))
-        report.add("cosmic:imports", Level.WARNING, output[:80])
+            print(_fail(f"  {mode}: --help failed (rc={rc}): {(stdout + stderr)[:120]}"))
+            report.add(f"cosmic:mode:{mode}", Level.CRITICAL, f"rc={rc}")
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +565,7 @@ def check_env() -> None:
         "SIRIL_BINARY",
         "ASTAP_BINARY",
         "ASTAP_STAR_DB_PATH",
-        "COSMIC_CLARITY_SOURCE_PATH",
+        "COSMIC_CLARITY_CLI",
         "GPU_DEVICES",
         "LOG_LEVEL",
     ]

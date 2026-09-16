@@ -118,73 +118,28 @@ RUN pip install \
         # Cosmic Clarity & GraXpert AI inference runtime (CUDA 12.x build)
         onnxruntime-gpu
 
-# ── Stage 5: Cosmic Clarity & GraXpert sources ────────────────────────────
+# ── Stage 5: Cosmic Clarity (via SetiAstroSuitePro) & GraXpert sources ────
 FROM python-deps AS ai-tools
 
-# Cosmic Clarity — MIT licence Python scripts from setiastro
-# Clone first; install requirements separately so a pip failure is fatal
-# (not silently swallowed by the || fallback on the clone).
-# onnxruntime-gpu is already installed above; the requirements.txt may pin
-# additional helpers (tifffile, etc.) that we still want.
-RUN git clone --depth=1 https://github.com/setiastro/cosmicclarity.git \
-        /opt/cosmic-clarity \
-    || echo "WARNING: Cosmic Clarity clone failed — mount sources manually"
-RUN test -f /opt/cosmic-clarity/requirements.txt \
-    && pip install -r /opt/cosmic-clarity/requirements.txt \
-    || true
-# sharpen, super-resolution and darkstar scripts import PyQt6 unconditionally
-# at the top of their module — even headless CLI invocations need the package.
-# QT_QPA_PLATFORM=offscreen (set below) lets Qt run without a real display.
-# sep (Source Extractor Python) is used by SetiAstroCosmicClarity.py for PSF
-# auto-detection; it must be installed alongside PyQt6.
-RUN pip install PyQt6 sep || true
-
-# Upstream denoise script bug (as of AI3.6): when processing a mono 32-bit float
-# FITS file the `actual_bit_depth` local variable is only assigned in the RGB and
-# 32-bit-unsigned branches, but referenced unconditionally in the print() call
-# after hdu.writeto() — causing UnboundLocalError (exit 1) even though the output
-# file was written successfully.  Patch once here so all rebuild layers pick it up.
-RUN python3 - <<'PYEOF'
-import pathlib
-p = pathlib.Path('/opt/cosmic-clarity/setiastrocosmicclarity_denoise.py')
-if not p.exists():
-    print("WARNING: denoise script not found — skipping patch")
-else:
-    txt = p.read_text()
-    old = '                if is_mono:  # Grayscale FITS'
-    new = ('                actual_bit_depth = bit_depth'
-           '  # default (fixes UnboundLocalError for mono 32-bit float FITS)\n'
-           '                if is_mono:  # Grayscale FITS')
-    if old in txt:
-        p.write_text(txt.replace(old, new, 1))
-        print('Patched setiastrocosmicclarity_denoise.py: actual_bit_depth fallback')
-    else:
-        print('WARNING: patch target not found; upstream may have already fixed this')
-PYEOF
-
-# Download new Cosmic Clarity model weights (not committed to the git repo).
-# Scripts load models from exe_dir = /opt/cosmic-clarity/ at runtime.
-# Each download is individually fault-tolerant; a network failure at build time
-# only produces a warning — init-models.sh can retry at first run.
-RUN CC_RELEASE="https://github.com/setiastro/cosmicclarity/releases/download/Linux"; \
-    for model in \
-        deep_denoise_cnn_AI3_6.pth \
-        deep_sharp_stellar_cnn_AI3_5s.pth \
-        deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth \
-        deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth \
-        deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth \
-        deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth \
-        superres_2x.pth \
-        superres_3x.pth \
-        superres_4x.pth \
-        darkstar_v2.1.pth \
-        darkstar_v2.1c.pth; do \
-        target="/opt/cosmic-clarity/${model}"; \
-        [ -f "${target}" ] && continue; \
-        wget -q --tries=3 --timeout=120 \
-            "${CC_RELEASE}/${model}" -O "${target}" \
-        || { echo "WARNING: download failed for ${model}"; rm -f "${target}"; }; \
-    done
+# Cosmic Clarity engines — formerly a standalone script bundle at
+# github.com/setiastro/cosmicclarity (archived 2026-09-16, read-only).
+# Replaced by SetiAstroSuitePro (SASpro), the actively maintained successor
+# (GPL-3.0, github.com/setiastro/setiastrosuitepro), which bundles the same
+# denoise/sharpen/superres/darkstar engines plus a new satellite-trail
+# remover and a built-in aberration corrector, behind a real headless CLI:
+# https://github.com/setiastro/setiastrosuitepro/wiki/CLI:-Command-Line-Interface
+#
+# `cosmicclarity` is the pip-installed entry point (see cosmic_adapter.py).
+# SASpro manages its own model weights (no manual .pth download step here,
+# unlike the old bundle) — verify on first headless run whether that means
+# bundled-in-the-wheel or an on-demand download; if the latter, models must
+# be pre-warmed into a persisted volume before an air-gapped deploy.
+RUN pip install setiastrosuitepro \
+    && cosmicclarity --help > /dev/null \
+    && cosmicclarity denoise --help > /dev/null \
+    && cosmicclarity sharpen --help > /dev/null \
+    && cosmicclarity superres --help > /dev/null \
+    && cosmicclarity satellite --help > /dev/null
 
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models

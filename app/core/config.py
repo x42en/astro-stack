@@ -99,6 +99,11 @@ class Settings(BaseSettings):
     models_path: str = "/models"
 
     # ── External tool binaries ────────────────────────────────────────────────
+    # ``cosmicclarity`` is the SetiAstroSuitePro (SASpro) headless CLI entry
+    # point, installed via `pip install setiastrosuitepro` (replaces the
+    # archived setiastro/cosmicclarity script bundle — see
+    # https://github.com/setiastro/setiastrosuitepro/wiki/CLI:-Command-Line-Interface).
+    cosmic_clarity_cli: str = "cosmicclarity"
     siril_binary: str = "siril-cli"
     # astap_cli is the headless command-line solver (no GTK / no display
     # required).  The standard "astap" GUI binary fails in Docker with
@@ -120,6 +125,10 @@ class Settings(BaseSettings):
     graxpert_ai_model: str = "1.0.1"
 
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
+    # Deprecated: the old standalone script bundle used a fixed source
+    # directory. SASpro's `cosmicclarity` CLI is resolved via PATH instead
+    # (see cosmic_clarity_cli above). Kept only so stale .env files don't
+    # cause a startup validation error.
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"
 
     # ── Mock auth bridge (used only when auth_enabled is False) ──────────────
