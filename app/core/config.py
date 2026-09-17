@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # https://github.com/setiastro/setiastrosuitepro/wiki/CLI:-Command-Line-Interface).
     cosmic_clarity_cli: str = "cosmicclarity"
     siril_binary: str = "siril-cli"
+    # Minimum Siril version required by generated `pyscript`-wrapping .ssf
+    # files (the `requires` command). Bump alongside the sirilpy module
+    # version actually installed (see SirilPyAdapter).
+    siril_min_version: str = "1.4.0"
     # astap_cli is the headless command-line solver (no GTK / no display
     # required).  The standard "astap" GUI binary fails in Docker with
     # "Gtk-WARNING: cannot open display".  Both accept identical CLI flags.
