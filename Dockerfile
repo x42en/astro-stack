@@ -141,6 +141,15 @@ RUN pip install setiastrosuitepro \
     && cosmicclarity superres --help > /dev/null \
     && cosmicclarity satellite --help > /dev/null
 
+# sirilpy — Siril's Python scripting module (SirilPyAdapter, see
+# app/pipeline/adapters/siril_pyadapter.py). Not published on PyPI; it ships
+# as source inside the `siril` apt package installed in the siril-build
+# stage above, at /usr/share/siril/python_module (valid pyproject.toml).
+# Installing it here (rather than depending on it being importable from the
+# system Python) makes it available inside our own venv at /opt/venv.
+RUN pip install /usr/share/siril/python_module \
+    && python -c "import sirilpy" 
+
 # GraXpert — GPLv3 gradient removal
 # GraXpert uses MinIO S3 to download AI models
 # We need to fetch the s3_secrets.py file which contains credentials/endpoint
