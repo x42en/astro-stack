@@ -56,6 +56,8 @@ class EventType(str, Enum):
         CANCELLED: The pipeline job was cancelled.
         SESSION_DETECTED: Watchdog has detected a new session.
         SESSION_READY: Session frame inventory is complete.
+        ADAPTIVE_ITERATION: One iteration of the Phase 2 vision-critic loop
+            has completed for a pipeline step.
     """
 
     PROGRESS = "progress"
@@ -66,6 +68,7 @@ class EventType(str, Enum):
     CANCELLED = "cancelled"
     SESSION_DETECTED = "session_detected"
     SESSION_READY = "session_ready"
+    ADAPTIVE_ITERATION = "adaptive_iteration"
     SESSION_STATUS = "session_status"
     LIVESTACK_FRAME_ACCEPTED = "livestack_frame_accepted"
     LIVESTACK_FRAME_REJECTED = "livestack_frame_rejected"
@@ -282,6 +285,37 @@ class SessionReadyEvent(BaseEvent):
     input_format: str
 
 
+class AdaptiveIterationEvent(BaseEvent):
+    """One completed iteration of the Phase 2 adaptive vision-critic loop.
+
+    Emitted after the critic evaluates a step's output and (unless it was
+    already satisfied) a patch was applied and the step re-run. Off by
+    default: only emitted when a profile enables ``adaptive_critic_enabled``.
+
+    Attributes:
+        type: Always ``EventType.ADAPTIVE_ITERATION``.
+        step: Machine-readable identifier of the step being refined.
+        iteration: 0-based iteration index.
+        satisfied: Whether the critic accepted the result at this iteration.
+        confidence: Critic's self-reported confidence (0.0-1.0).
+        reasoning: Critic's short English explanation, shown as a reasoning
+            trace in the UI.
+        patch_applied: Config changes actually applied after catalog
+            validation/clamping; empty when ``satisfied`` is True.
+        human_approved: ``None`` when no human-approval gate was involved for
+            this iteration; otherwise whether the reviewer approved it.
+    """
+
+    type: Literal[EventType.ADAPTIVE_ITERATION] = EventType.ADAPTIVE_ITERATION
+    step: str
+    iteration: int
+    satisfied: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str
+    patch_applied: dict[str, Any] = Field(default_factory=dict)
+    human_approved: Optional[bool] = None
+
+
 class SessionStatusEvent(BaseEvent):
     """Session-level status change, broadcast to all connected clients.
 
@@ -375,6 +409,7 @@ AnyEvent = Union[
     SessionDetectedEvent,
     SessionReadyEvent,
     SessionStatusEvent,
+    AdaptiveIterationEvent,
     LiveStackFrameAcceptedEvent,
     LiveStackFrameRejectedEvent,
     LiveStackPreviewUpdatedEvent,

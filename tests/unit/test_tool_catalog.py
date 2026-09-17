@@ -12,9 +12,10 @@ import pytest
 
 from app.domain.profile import ProcessingProfileConfig
 from app.pipeline.adaptive.tool_catalog import (
+    ADAPTIVE_STEP_FIELDS,
+    TOOL_CAPABILITIES,
     ToolName,
     ValueType,
-    TOOL_CAPABILITIES,
     capabilities_for_tool,
     get_capability,
     render_capabilities_for_prompt,
@@ -117,3 +118,25 @@ class TestToolCapabilityIsFrozen:
         cap = get_capability("denoise_strength")
         with pytest.raises(Exception):  # pydantic ValidationError on frozen model
             cap.field_name = "mutated"  # type: ignore[misc]
+
+
+class TestAdaptiveStepFields:
+    def test_all_referenced_fields_exist_in_catalog(self) -> None:
+        for _step_name, fields in ADAPTIVE_STEP_FIELDS.items():
+            for field_name in fields:
+                # Raises KeyError (test failure) if hallucinated/renamed.
+                get_capability(field_name)
+
+    def test_all_referenced_fields_exist_on_real_profile(self) -> None:
+        for fields in ADAPTIVE_STEP_FIELDS.values():
+            for field_name in fields:
+                assert field_name in _REAL_FIELD_NAMES
+
+    def test_stretch_color_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["stretch_color"]) == {
+            "stretch_method",
+            "stretch_strength",
+            "color_calibration_enabled",
+            "camera_defiltered",
+            "photometric_calibration_enabled",
+        }

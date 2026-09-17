@@ -603,9 +603,54 @@ TOOL_CAPABILITIES: tuple[ToolCapability, ...] = (
         "Too high delays surfacing a genuinely broken configuration to the user.",
         _LOW, _INT, min_value=0, max_value=10,
     ),
+    # ── Adaptive vision critic (Phase 2, not owned by an external tool) ──────
+    _cap(
+        "adaptive_critic_enabled", None,
+        "Enables the Phase 2 vision-critic loop, which re-runs an eligible "
+        "step with a vision-LLM-adjusted config until satisfied.",
+        "Adds an automated refinement pass on top of the fixed pipeline; fully "
+        "unattended, no pause, unless a human-approval gate is also enabled.",
+        "Adds latency (extra vision-model calls and step re-runs) and depends "
+        "on the configured vLLM endpoint being reachable.",
+        _LOW, _BOOL,
+    ),
+    _cap(
+        "adaptive_critic_max_iterations", None,
+        "Hard cap on critic iterations for the adaptive loop.",
+        "Higher values allow more refinement passes before giving up.",
+        "Too high adds latency for marginal gains once the critic has converged.",
+        _LOW, _INT, min_value=1, max_value=10,
+    ),
+    _cap(
+        "adaptive_critic_require_human_approval", None,
+        "Gates critic-proposed patches behind external approval instead of "
+        "applying them automatically.",
+        "When True, a human reviewer must approve each patch before it is "
+        "applied and the step re-run.",
+        "Defaults to False (fully autonomous) to keep the pipeline hands-off "
+        "for novices; enabling it without a reviewer configured auto-approves "
+        "with a logged warning instead of stalling the job.",
+        _MED, _BOOL,
+    ),
 )
 
 _BY_FIELD: dict[str, ToolCapability] = {cap.field_name: cap for cap in TOOL_CAPABILITIES}
+
+# Pipeline steps eligible for the Phase 2 adaptive vision-critic loop, mapped
+# to the profile field names the critic is allowed to adjust for that step.
+# Currently only ``stretch_color`` is wired up in the orchestrator (first
+# target per the phased rollout plan); extending coverage only requires
+# adding another step name here plus wiring it in
+# ``PipelineOrchestrator._run_adaptive_loop_for_step``.
+ADAPTIVE_STEP_FIELDS: dict[str, tuple[str, ...]] = {
+    "stretch_color": (
+        "stretch_method",
+        "stretch_strength",
+        "color_calibration_enabled",
+        "camera_defiltered",
+        "photometric_calibration_enabled",
+    ),
+}
 
 
 def get_capability(field_name: str) -> ToolCapability:

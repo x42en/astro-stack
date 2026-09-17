@@ -82,6 +82,10 @@ class ProcessingProfileConfig(SQLModel):
         star_separation_nebula_weight: Blend weight for the nebula layer.
         star_separation_star_weight: Blend weight for the star layer.
         max_retries: Override the global maximum retry count for this profile.
+        adaptive_critic_enabled: Enable the Phase 2 vision-critic loop.
+        adaptive_critic_max_iterations: Iteration budget for the critic loop.
+        adaptive_critic_require_human_approval: Gate critic patches behind
+            external approval instead of applying them automatically.
     """
 
     # ── Stacking ──────────────────────────────────────────────────────────────
@@ -257,6 +261,21 @@ class ProcessingProfileConfig(SQLModel):
 
     # ── Retry ─────────────────────────────────────────────────────
     max_retries: int = 3
+
+    # ── Adaptive vision critic (Phase 2) ─────────────────────────────────────
+    # AstroStack's core goal is complete, unattended automation for novices,
+    # so this extra AI critic loop (re-runs a step with a vision-LLM-adjusted
+    # config until satisfied) is strictly opt-in and OFF by default — never
+    # required for a profile to produce a finished, exported image.
+    adaptive_critic_enabled: bool = False
+    # Hard cap on critic iterations for the loop (see
+    # ``app.pipeline.adaptive.runner.run_adaptive_loop``).
+    adaptive_critic_max_iterations: int = 3
+    # When True, a critic-proposed patch is only applied after external
+    # approval (``human_reviewer`` hook). Defaults to False so the loop is
+    # fully autonomous end-to-end, matching the novice-friendly product goal;
+    # advanced users may opt into a review gate per profile.
+    adaptive_critic_require_human_approval: bool = False
 
 
 # Built-in preset configurations ──────────────────────────────────────────────

@@ -92,6 +92,19 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.2"
 
+    # ── vLLM (vision-language model for the Phase 2 adaptive critic) ─────────
+    # OpenAI-compatible chat/completions endpoint (vLLM `--served-model-name`).
+    # Only exercised when a profile opts in via `adaptive_critic_enabled`
+    # (default False) — AstroStack's core automated pipeline never depends
+    # on this being reachable.
+    vllm_base_url: str = "http://vllm:8000/v1"
+    vllm_model: str = "lagarde-vllm"
+    # vLLM's OpenAI-compatible server ignores this unless --api-key was
+    # passed at its own startup; kept so a real deployment can require a
+    # shared secret later without an adapter code change.
+    vllm_api_key: str = ""
+    vllm_timeout_seconds: float = Field(default=120.0, gt=0.0)
+
     # ── Storage paths ─────────────────────────────────────────────────────────
     inbox_path: str = "/inbox"
     sessions_path: str = "/sessions"
