@@ -76,31 +76,82 @@ class CosmicClarityAdapter:
                 ``--denoise-luma`` and ``--denoise-color``.
             luminance_only: Process luminance channel only, preserving
                 chrominance (``--denoise-mode luminance`` vs ``full``).
-            aberration_first: Run SASpro's built-in Aberration Remover before
-                denoising (``--aberration-first``) — corrects colour fringing
-                from chromatic aberration at the optics level.
+            aberration_first: Run ``cosmicclarity correct`` (standalone
+                Aberration Remover) as a pre-pass before denoising. Unlike
+                ``sharpen`` (which has an inline ``--stellar-correct-mode``),
+                ``denoise`` has no built-in correction flag, so this chains
+                two CLI calls through a temporary intermediate file.
             timeout: Maximum execution time in seconds.
 
         Raises:
             PipelineStepException: If the CLI fails or times out.
         """
+        source = input_path
+        corrected: Optional[Path] = None
+        if aberration_first:
+            corrected = output_path.parent / f"_{output_path.stem}_corrected.fits"
+            await self.correct_aberration(input_path, corrected, timeout=timeout)
+            source = corrected
+
         args = [
             "--denoise-luma", str(strength),
             "--denoise-color", str(strength),
             "--denoise-mode", "luminance" if luminance_only else "full",
         ]
-        if aberration_first:
-            args.append("--aberration-first")
+        try:
+            await self._run_cc(
+                mode="denoise",
+                input_path=source,
+                output_path=output_path,
+                extra_args=args,
+                step_name="denoise",
+                error_code=ErrorCode.PIPE_COSMIC_DENOISE_FAILED,
+                timeout=timeout,
+            )
+        finally:
+            if corrected is not None:
+                corrected.unlink(missing_ok=True)
+        logger.info("cosmic_denoise_done", output=str(output_path))
+
+    async def correct_aberration(
+        self,
+        input_path: Path,
+        output_path: Path,
+        temp_stretch: bool = True,
+        target_median: float = 0.25,
+        timeout: float = 300.0,
+    ) -> None:
+        """Run SASpro's standalone Aberration Remover (``cc correct``).
+
+        Corrects colour fringing from chromatic aberration at the optics
+        level, independent of sharpening/denoising. Confirmed as a real CLI
+        subcommand (v1.21.5.post1): ``sharpen``/``both`` have their own inline
+        ``--stellar-correct-mode``, but ``denoise`` does not, hence this
+        standalone entry point for chaining ahead of denoise.
+
+        Args:
+            input_path: Path to the input FITS file.
+            output_path: Desired output FITS file path.
+            temp_stretch: Temporarily stretch linear data before AI
+                processing then unstretch after (recommended for linear FITS).
+            target_median: Target median for the temporary stretch.
+            timeout: Maximum execution time in seconds.
+
+        Raises:
+            PipelineStepException: If the CLI fails or times out.
+        """
+        args = ["--target-median", str(target_median)]
+        args.append("--temp-stretch" if temp_stretch else "--no-temp-stretch")
         await self._run_cc(
-            mode="denoise",
+            mode="correct",
             input_path=input_path,
             output_path=output_path,
             extra_args=args,
-            step_name="denoise",
+            step_name="aberration_correction",
             error_code=ErrorCode.PIPE_COSMIC_DENOISE_FAILED,
             timeout=timeout,
         )
-        logger.info("cosmic_denoise_done", output=str(output_path))
+        logger.info("cosmic_aberration_correction_done", output=str(output_path))
 
     async def sharpen(
         self,
@@ -123,8 +174,10 @@ class CosmicClarityAdapter:
             nonstellar_amount: Sharpening amount for extended objects (0.0-1.0).
             nonstellar_strength: PSF radius hint for the non-stellar model,
                 mapped to ``--nonstellar-psf``.
-            aberration_first: Run SASpro's built-in Aberration Remover before
-                sharpening (``--aberration-first``).
+            aberration_first: Run the Aberration Remover before sharpening via
+                the inline ``--stellar-correct-mode correct_sharpen`` flag
+                (confirmed CLI option, v1.21.5.post1 — no separate CLI call
+                needed here, unlike ``denoise``).
             timeout: Maximum execution time in seconds.
 
         Raises:
@@ -137,7 +190,7 @@ class CosmicClarityAdapter:
             "--nonstellar-psf", str(nonstellar_strength),
         ]
         if aberration_first:
-            args.append("--aberration-first")
+            args.extend(["--stellar-correct-mode", "correct_sharpen"])
         await self._run_cc(
             mode="sharpen",
             input_path=input_path,
@@ -230,15 +283,11 @@ class CosmicClarityAdapter:
     ) -> None:
         """Remove stars from an image, isolating the nebula component.
 
-        NOTE — Phase 0 open item: SASpro's documented headless CLI
-        (setiastrosuitepro wiki, "CLI: Command Line Interface") only lists
-        five ``cc`` modes: sharpen, denoise, both, superres, satellite. Dark
-        Star / star removal is NOT among them, even though the engine exists
-        internally (``src/setiastro/saspro/cosmicclarity_engines/darkstar_engine.py``).
-        ``"darkstar"`` below is a best-effort guess at the mode name, not a
-        confirmed CLI feature — verify hands-on before relying on it; if it
-        errors, star separation must stay on the old standalone Cosmic
-        Clarity scripts (or be disabled) until SASpro exposes it headless.
+        NOTE — confirmed on real install (v1.21.5.post1): ``darkstar`` IS a
+        real ``cc`` subcommand (``{sharpen,correct,denoise,both,superres,
+        satellite,darkstar}``), verified via ``cosmicclarity darkstar --help``
+        on the target GPU server — this was previously an open question
+        (the public wiki page didn't list it) and is now resolved.
 
         Args:
             input_path: Path to the input FITS file.

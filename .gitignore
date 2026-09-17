@@ -13,6 +13,7 @@ build/
 .coverage
 htmlcov/
 .venv/
+.venv312/
 venv/
 ENV/
 .env
