@@ -132,6 +132,22 @@ class TestAdaptiveStepFields:
             for field_name in fields:
                 assert field_name in _REAL_FIELD_NAMES
 
+    def test_all_step_names_are_real_pipeline_steps(self) -> None:
+        from app.pipeline.orchestrator import PIPELINE_STEP_PLAN  # noqa: PLC0415
+
+        real_step_names = {name for name, _ in PIPELINE_STEP_PLAN}
+        for step_name in ADAPTIVE_STEP_FIELDS:
+            assert step_name in real_step_names
+
+    def test_all_step_names_have_a_preview_mapping(self) -> None:
+        # The orchestrator's generic loop hook needs a FITS output path per
+        # step (via _PREVIEW_STEPS) to locate stats/preview; a step missing
+        # here would silently no-op the adaptive loop despite being listed.
+        from app.pipeline.orchestrator import PipelineOrchestrator  # noqa: PLC0415
+
+        for step_name in ADAPTIVE_STEP_FIELDS:
+            assert step_name in PipelineOrchestrator._PREVIEW_STEPS
+
     def test_stretch_color_fields_match_expected_set(self) -> None:
         assert set(ADAPTIVE_STEP_FIELDS["stretch_color"]) == {
             "stretch_method",
@@ -140,3 +156,42 @@ class TestAdaptiveStepFields:
             "camera_defiltered",
             "photometric_calibration_enabled",
         }
+
+    def test_gradient_removal_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["gradient_removal"]) == {
+            "gradient_removal_method",
+            "gradient_removal_correction",
+            "gradient_removal_smoothing",
+            "gradient_removal_deconv_strength",
+            "gradient_removal_deconv_psfsize",
+        }
+
+    def test_denoise_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["denoise"]) == {
+            "denoise_strength",
+            "denoise_luminance_only",
+            "denoise_aberration_first",
+        }
+
+    def test_sharpen_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["sharpen"]) == {
+            "sharpen_stellar_amount",
+            "sharpen_nonstellar_amount",
+            "sharpen_radius",
+            "sharpen_aberration_first",
+        }
+
+    def test_super_resolution_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["super_resolution"]) == {"super_resolution_scale"}
+
+    def test_satellite_removal_fields_match_expected_set(self) -> None:
+        assert set(ADAPTIVE_STEP_FIELDS["satellite_removal"]) == {
+            "satellite_removal_sensitivity",
+            "satellite_removal_clip_trail",
+            "satellite_removal_mode",
+        }
+
+    def test_no_step_exposes_its_own_enabled_flag(self) -> None:
+        # The critic must never be able to toggle whether a step runs at all.
+        for step_name, fields in ADAPTIVE_STEP_FIELDS.items():
+            assert f"{step_name}_enabled" not in fields

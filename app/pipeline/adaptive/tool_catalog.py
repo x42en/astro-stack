@@ -638,17 +638,60 @@ _BY_FIELD: dict[str, ToolCapability] = {cap.field_name: cap for cap in TOOL_CAPA
 
 # Pipeline steps eligible for the Phase 2 adaptive vision-critic loop, mapped
 # to the profile field names the critic is allowed to adjust for that step.
-# Currently only ``stretch_color`` is wired up in the orchestrator (first
-# target per the phased rollout plan); extending coverage only requires
-# adding another step name here plus wiring it in
-# ``PipelineOrchestrator._run_adaptive_loop_for_step``.
+# ``PipelineOrchestrator._run_adaptive_loop_for_step`` is fully generic over
+# this dict — adding a step here is the ONLY change needed to enable the loop
+# for it (no orchestrator code change required), provided the step is also
+# listed in ``PipelineOrchestrator._PREVIEW_STEPS`` (needed to locate its FITS
+# output and JPEG preview).
+#
+# Deliberately excluded so far:
+#   * ``preprocessing`` (stacking) — technically preview-eligible, but a full
+#     re-stack per critic iteration is far too slow for a 1-3 iteration
+#     "polish" loop, and its parameters (rejection/normalization/drizzle/
+#     findstar) govern registration correctness more than visual "look".
+#   * ``star_separation`` — not in ``_PREVIEW_STEPS`` yet (no JPEG preview
+#     wired up), and disabled by default; adding preview support for it is a
+#     separate, orthogonal piece of work.
+#   * ``raw_conversion`` / ``plate_solving`` / ``export`` — not AI-tunable
+#     "look" steps a vision critic can meaningfully assess.
+#   * Each step's own ``*_enabled`` field and any pure engine/version/
+#     performance selector (e.g. ``denoise_engine``, ``*_ai_model``,
+#     ``*_batch_size``) — these change *whether*/*how* the step runs at a
+#     structural level rather than fine-tuning its output, which is riskier
+#     to hand to an iterative critic than the quality knobs below.
 ADAPTIVE_STEP_FIELDS: dict[str, tuple[str, ...]] = {
+    "gradient_removal": (
+        "gradient_removal_method",
+        "gradient_removal_correction",
+        "gradient_removal_smoothing",
+        "gradient_removal_deconv_strength",
+        "gradient_removal_deconv_psfsize",
+    ),
     "stretch_color": (
         "stretch_method",
         "stretch_strength",
         "color_calibration_enabled",
         "camera_defiltered",
         "photometric_calibration_enabled",
+    ),
+    "denoise": (
+        "denoise_strength",
+        "denoise_luminance_only",
+        "denoise_aberration_first",
+    ),
+    "sharpen": (
+        "sharpen_stellar_amount",
+        "sharpen_nonstellar_amount",
+        "sharpen_radius",
+        "sharpen_aberration_first",
+    ),
+    "super_resolution": (
+        "super_resolution_scale",
+    ),
+    "satellite_removal": (
+        "satellite_removal_sensitivity",
+        "satellite_removal_clip_trail",
+        "satellite_removal_mode",
     ),
 }
 
