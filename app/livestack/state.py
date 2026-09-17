@@ -54,6 +54,27 @@ class LiveStackState:
             available.
         total_integration_seconds: Sum of per-frame exposure times when
             FITS headers provide them; otherwise ``None``.
+        last_stretch: MTF stretch parameters (``target_bkg``,
+            ``shadows_clip``) actually applied to the most recent preview.
+            Reflects the adaptive critic's tuned values once one has run,
+            otherwise the fixed defaults.
+        adaptive_target_bkg: Critic-tuned ``target_bkg`` override, or
+            ``None`` while no evaluation has run yet (defaults apply).
+        adaptive_shadows_clip: Critic-tuned ``shadows_clip`` override, or
+            ``None`` while no evaluation has run yet (defaults apply).
+        adaptive_attempts: Number of critic evaluations performed so far
+            this session.
+        adaptive_converged: ``True`` once the critic reported satisfaction —
+            no further evaluations are scheduled once set, and the last
+            proposed parameters are reused for every subsequent frame.
+            Independently, evaluations also stop once ``adaptive_attempts``
+            reaches the configured cap even without satisfaction (best
+            effort freeze — see ``app/livestack/adaptive.py:should_evaluate``).
+        adaptive_last_evaluated_frame_count: ``frame_count`` at the last
+            evaluation, used to space out re-checks.
+        adaptive_history: Ordered list of past evaluation records (for
+            display/debugging) — small, capped implicitly by
+            ``adaptive_attempts``' hard limit.
     """
 
     session_id: str
@@ -69,6 +90,13 @@ class LiveStackState:
     # Last stretch parameters computed for the preview, kept for
     # client-side display / re-stretching.
     last_stretch: dict[str, float] = field(default_factory=dict)
+    # Phase 2 live adaptive critic bookkeeping (see app/livestack/adaptive.py).
+    adaptive_target_bkg: Optional[float] = None
+    adaptive_shadows_clip: Optional[float] = None
+    adaptive_attempts: int = 0
+    adaptive_converged: bool = False
+    adaptive_last_evaluated_frame_count: int = 0
+    adaptive_history: list[dict] = field(default_factory=list)
 
     def to_json(self) -> str:
         """Serialise to a JSON string for Redis storage."""

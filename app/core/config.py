@@ -105,6 +105,26 @@ class Settings(BaseSettings):
     vllm_api_key: str = ""
     vllm_timeout_seconds: float = Field(default=120.0, gt=0.0)
 
+    # ── Live-stacking adaptive critic ─────────────────────────────────────────
+    # Applies the same vision critic to the live-stacking preview loop: once
+    # enough accepted frames exist, the critic tunes the MTF autostretch
+    # parameters (target_bkg/shadows_clip — the only live-mode knobs today;
+    # denoise/sharpen/gradient-removal are batch-only and GPU-bound, deferred
+    # to avoid contending with vLLM's own GPU memory). Off by default —
+    # live sessions work exactly as before unless explicitly enabled.
+    live_adaptive_critic_enabled: bool = False
+    # Minimum accepted frames before the first evaluation — early stacks are
+    # too noisy (weak alignment/FWHM stats) for a meaningful judgement.
+    live_adaptive_critic_warmup_frames: int = Field(default=5, ge=1)
+    # Re-evaluate at most once every N newly accepted frames while not yet
+    # converged, to bound vLLM call volume over a long session.
+    live_adaptive_critic_recheck_every: int = Field(default=3, ge=1)
+    # Hard cap on evaluations per session; once reached the last proposed
+    # parameters are frozen and reused for all subsequent frames even if the
+    # critic never reported satisfaction (matches the "keep it and reuse it"
+    # behaviour requested — never call the critic forever on a long session).
+    live_adaptive_critic_max_attempts: int = Field(default=5, ge=1)
+
     # ── Storage paths ─────────────────────────────────────────────────────────
     inbox_path: str = "/inbox"
     sessions_path: str = "/sessions"
