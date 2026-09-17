@@ -166,6 +166,12 @@ RUN pip install graxpert[cuda] \
 # ── Stage 6: Final application image ──────────────────────────────────────
 FROM ai-tools AS final
 
+LABEL org.opencontainers.image.title="AstroStack" \
+      org.opencontainers.image.description="Automated astrophotography processing pipeline with event-driven API" \
+      org.opencontainers.image.url="https://github.com/bitsdiver/astro-stack" \
+      org.opencontainers.image.source="https://github.com/bitsdiver/astro-stack" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
+
 # Create non-root user for the application
 RUN useradd -m -s /bin/bash astro \
     && mkdir -p /inbox /sessions /output /models /opt/ephemerides \
