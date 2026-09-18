@@ -92,6 +92,39 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama:11434"
     ollama_model: str = "llama3.2"
 
+    # ── vLLM (vision-language model for the Phase 2 adaptive critic) ─────────
+    # OpenAI-compatible chat/completions endpoint (vLLM `--served-model-name`).
+    # Only exercised when a profile opts in via `adaptive_critic_enabled`
+    # (default False) — AstroStack's core automated pipeline never depends
+    # on this being reachable.
+    vllm_base_url: str = "http://vllm:8000/v1"
+    vllm_model: str = "lagarde-vllm"
+    # vLLM's OpenAI-compatible server ignores this unless --api-key was
+    # passed at its own startup; kept so a real deployment can require a
+    # shared secret later without an adapter code change.
+    vllm_api_key: str = ""
+    vllm_timeout_seconds: float = Field(default=120.0, gt=0.0)
+
+    # ── Live-stacking adaptive critic ─────────────────────────────────────────
+    # Applies the same vision critic to the live-stacking preview loop: once
+    # enough accepted frames exist, the critic tunes the MTF autostretch
+    # parameters (target_bkg/shadows_clip — the only live-mode knobs today;
+    # denoise/sharpen/gradient-removal are batch-only and GPU-bound, deferred
+    # to avoid contending with vLLM's own GPU memory). Off by default —
+    # live sessions work exactly as before unless explicitly enabled.
+    live_adaptive_critic_enabled: bool = False
+    # Minimum accepted frames before the first evaluation — early stacks are
+    # too noisy (weak alignment/FWHM stats) for a meaningful judgement.
+    live_adaptive_critic_warmup_frames: int = Field(default=5, ge=1)
+    # Re-evaluate at most once every N newly accepted frames while not yet
+    # converged, to bound vLLM call volume over a long session.
+    live_adaptive_critic_recheck_every: int = Field(default=3, ge=1)
+    # Hard cap on evaluations per session; once reached the last proposed
+    # parameters are frozen and reused for all subsequent frames even if the
+    # critic never reported satisfaction (matches the "keep it and reuse it"
+    # behaviour requested — never call the critic forever on a long session).
+    live_adaptive_critic_max_attempts: int = Field(default=5, ge=1)
+
     # ── Storage paths ─────────────────────────────────────────────────────────
     inbox_path: str = "/inbox"
     sessions_path: str = "/sessions"
@@ -99,7 +132,16 @@ class Settings(BaseSettings):
     models_path: str = "/models"
 
     # ── External tool binaries ────────────────────────────────────────────────
+    # ``cosmicclarity`` is the SetiAstroSuitePro (SASpro) headless CLI entry
+    # point, installed via `pip install setiastrosuitepro` (replaces the
+    # archived setiastro/cosmicclarity script bundle — see
+    # https://github.com/setiastro/setiastrosuitepro/wiki/CLI:-Command-Line-Interface).
+    cosmic_clarity_cli: str = "cosmicclarity"
     siril_binary: str = "siril-cli"
+    # Minimum Siril version required by generated `pyscript`-wrapping .ssf
+    # files (the `requires` command). Bump alongside the sirilpy module
+    # version actually installed (see SirilPyAdapter).
+    siril_min_version: str = "1.4.0"
     # astap_cli is the headless command-line solver (no GTK / no display
     # required).  The standard "astap" GUI binary fails in Docker with
     # "Gtk-WARNING: cannot open display".  Both accept identical CLI flags.
@@ -120,6 +162,10 @@ class Settings(BaseSettings):
     graxpert_ai_model: str = "1.0.1"
 
     # ── Cosmic Clarity ────────────────────────────────────────────────────────
+    # Deprecated: the old standalone script bundle used a fixed source
+    # directory. SASpro's `cosmicclarity` CLI is resolved via PATH instead
+    # (see cosmic_clarity_cli above). Kept only so stale .env files don't
+    # cause a startup validation error.
     cosmic_clarity_source_path: str = "/opt/cosmic-clarity"
 
     # ── Mock auth bridge (used only when auth_enabled is False) ──────────────

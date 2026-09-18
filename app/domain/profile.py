@@ -82,6 +82,10 @@ class ProcessingProfileConfig(SQLModel):
         star_separation_nebula_weight: Blend weight for the nebula layer.
         star_separation_star_weight: Blend weight for the star layer.
         max_retries: Override the global maximum retry count for this profile.
+        adaptive_critic_enabled: Enable the Phase 2 vision-critic loop.
+        adaptive_critic_max_iterations: Iteration budget for the critic loop.
+        adaptive_critic_require_human_approval: Gate critic patches behind
+            external approval instead of applying them automatically.
     """
 
     # ── Stacking ──────────────────────────────────────────────────────────────
@@ -193,12 +197,22 @@ class ProcessingProfileConfig(SQLModel):
     # Number of tiles processed in parallel by GraXpert (1–32).  Higher values
     # are faster but may cause GPU OOM on large frames.  Clamped server-side.
     denoise_graxpert_batch_size: int = 4
+    # Runs SASpro's built-in Aberration Remover before denoising
+    # (Cosmic Clarity engine only; ``--aberration-first`` on the CLI).
+    # Corrects colour fringing caused by chromatic aberration in the optics.
+    # Cheap relative to the AI denoise/sharpen passes themselves; safe to
+    # enable by default once verified on real data (currently opt-in).
+    denoise_aberration_first: bool = False
 
-    # ── Sharpen ───────────────────────────────────────────────────────────────
+    # ── Sharpen ─────────────────────────────────────────────────────
     sharpen_enabled: bool = True
     sharpen_stellar_amount: float = 0.3
     sharpen_nonstellar_amount: float = 0.4
     sharpen_radius: int = 2
+    # Same Aberration Remover pre-pass as ``denoise_aberration_first``, run
+    # before sharpening instead. Only one of the two should normally be
+    # enabled per job (whichever AI step runs first in the profile).
+    sharpen_aberration_first: bool = False
 
     # ── Super-resolution ──────────────────────────────────────────────────────
     super_resolution_enabled: bool = False
@@ -224,8 +238,44 @@ class ProcessingProfileConfig(SQLModel):
     # when the mode is ``"auto"``.
     star_separation_mode: str = "auto"  # auto|on|off
 
-    # ── Retry ─────────────────────────────────────────────────────────────────
+    # ── Satellite trail removal (SASpro `cc satellite`) ──────────────────
+    # Disabled by default: most curated test datasets don't contain trails,
+    # and running an extra AI pass on every job has a real time cost. Worth
+    # enabling for real-world wide-field/long-exposure sessions where
+    # satellite/aircraft trails are common and previously went unhandled
+    # (this capability did not exist in the old standalone Cosmic Clarity
+    # script bundle; SASpro added it as a genuinely new tool, not just a
+    # feature-parity replacement).
+    satellite_removal_enabled: bool = False
+    # ``"full"`` processes all channels; ``"luminance"`` is faster and
+    # preserves chrominance, mirroring ``denoise_luminance_only``.
+    satellite_removal_mode: str = "full"  # full|luminance
+    # Detection sensitivity threshold: lower values detect fainter/thinner
+    # trails but risk false positives on genuine linear structures (edge of
+    # a bright nebula, diffraction spikes). SASpro's documented default.
+    satellite_removal_sensitivity: float = 0.10
+    # When True, detected trail pixels are hard-clipped rather than
+    # inpainted/blended — more reliable removal but can leave a visible seam
+    # on wide trails; disable for a softer (if less complete) correction.
+    satellite_removal_clip_trail: bool = True
+
+    # ── Retry ─────────────────────────────────────────────────────
     max_retries: int = 3
+
+    # ── Adaptive vision critic (Phase 2) ─────────────────────────────────────
+    # AstroStack's core goal is complete, unattended automation for novices,
+    # so this extra AI critic loop (re-runs a step with a vision-LLM-adjusted
+    # config until satisfied) is strictly opt-in and OFF by default — never
+    # required for a profile to produce a finished, exported image.
+    adaptive_critic_enabled: bool = False
+    # Hard cap on critic iterations for the loop (see
+    # ``app.pipeline.adaptive.runner.run_adaptive_loop``).
+    adaptive_critic_max_iterations: int = 3
+    # When True, a critic-proposed patch is only applied after external
+    # approval (``human_reviewer`` hook). Defaults to False so the loop is
+    # fully autonomous end-to-end, matching the novice-friendly product goal;
+    # advanced users may opt into a review gate per profile.
+    adaptive_critic_require_human_approval: bool = False
 
 
 # Built-in preset configurations ──────────────────────────────────────────────

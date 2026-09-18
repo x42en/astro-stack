@@ -1,0 +1,95 @@
+name: Build & Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build & Push to GHCR
+    # NOTE: this image bundles a CUDA/cuDNN base + PyTorch (cu128) + Siril/
+    # ASTAP/SASpro/GraXpert build dependencies and is expected to be several
+    # GB — likely close to or over the 14 GB SSD available on standard
+    # GitHub-hosted runners (checkout + base image pulls + every build layer
+    # all coexist on disk during the build, not just the final image). The
+    # cleanup step below reclaims ~25-40 GB by removing preinstalled
+    # toolchains this build never uses, which should be enough headroom for
+    # now. If a build still fails with "no space left on device", switch
+    # this line to a self-hosted runner with more disk (e.g. the existing
+    # GPU test server) instead of trying to shrink the image further:
+    #   runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ── Reclaim runner disk space ───────────────────────────────────────────
+      # ubuntu-latest ships with several large preinstalled toolchains
+      # (Android SDK, .NET, Haskell/GHC, extra Docker images) that this build
+      # never touches. Removing them first is the standard mitigation for
+      # large multi-GB image builds on the stock 14 GB runner disk.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/dotnet /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY" || true
+          docker image prune -af || true
+          df -h /
+
+      # ── Checkout ───────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Docker Buildx (builder with layer caching) ──────────────────────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Authenticate with GHCR ─────────────────────────────────────────────
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Compute image tags and labels ──────────────────────────────────────
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Tag semver releases as-is (v1.2.3 → 1.2.3, 1.2, 1, latest)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # Tag every push to main as `latest`
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Always attach the short commit SHA
+            type=sha,prefix=sha-,format=short
+
+      # ── Build & push ───────────────────────────────────────────────────────
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          # CUDA/cuDNN base images are amd64-only — no arm64 build here,
+          # unlike AstroUI's frontend image.
+          platforms: linux/amd64
+          # Only push on non-PR events (PRs build but do not publish)
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Persist the build cache in GitHub Actions cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -8,6 +8,7 @@ import uuid
 import pytest
 
 from app.domain.ws_event import (
+    AdaptiveIterationEvent,
     CompletedEvent,
     ErrorEvent,
     EventType,
@@ -76,6 +77,47 @@ class TestLogEvent:
         """Default log source is SYSTEM."""
         event = LogEvent(job_id=job_id, message="test")
         assert event.source == LogSource.SYSTEM
+
+
+class TestAdaptiveIterationEvent:
+    """Tests for AdaptiveIterationEvent schema."""
+
+    def test_serialises_to_json(self, job_id: uuid.UUID, session_id: uuid.UUID) -> None:
+        event = AdaptiveIterationEvent(
+            job_id=job_id,
+            session_id=session_id,
+            step="stretch_color",
+            iteration=0,
+            satisfied=False,
+            confidence=0.4,
+            reasoning="Too dim, increasing stretch strength.",
+            patch_applied={"stretch_strength": 180.0},
+        )
+        data = json.loads(event.model_dump_json())
+        assert data["type"] == EventType.ADAPTIVE_ITERATION
+        assert data["step"] == "stretch_color"
+        assert data["patch_applied"] == {"stretch_strength": 180.0}
+        assert data["human_approved"] is None
+
+    def test_confidence_out_of_range_rejected(self) -> None:
+        with pytest.raises(Exception):
+            AdaptiveIterationEvent(
+                step="stretch_color",
+                iteration=0,
+                satisfied=True,
+                confidence=1.5,
+                reasoning="x",
+            )
+
+    def test_default_patch_applied_is_empty_dict(self) -> None:
+        event = AdaptiveIterationEvent(
+            step="stretch_color",
+            iteration=0,
+            satisfied=True,
+            confidence=0.9,
+            reasoning="ok",
+        )
+        assert event.patch_applied == {}
 
 
 class TestErrorEvent:

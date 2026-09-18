@@ -15,67 +15,27 @@
 set -euo pipefail
 
 MODELS_DIR="${MODELS_PATH:-/models}"
-COSMIC_DIR="${MODELS_DIR}"
 GRAXPERT_DIR="${MODELS_DIR}/graxpert"
-COSMIC_SRC="${COSMIC_CLARITY_SOURCE_PATH:-/opt/cosmic-clarity}"
 
-mkdir -p "${COSMIC_DIR}" "${GRAXPERT_DIR}"
+mkdir -p "${GRAXPERT_DIR}"
 
 echo "=== Astro-Stack Model Initialiser ==="
 echo "Models directory: ${MODELS_DIR}"
 
-# ── Cosmic Clarity models ─────────────────────────────────────────────────────
+# ── Cosmic Clarity (via SetiAstroSuitePro) ────────────────────────────────────
 echo ""
-echo "--- Cosmic Clarity models ---"
+echo "--- Cosmic Clarity engines (SetiAstroSuitePro) ---"
 
-# Cosmic Clarity scripts load models from their own directory (exe_dir =
-# /opt/cosmic-clarity/).  The Dockerfile downloads them at build time, but
-# this section serves as a runtime fallback in case the build was done
-# without network access (e.g. air-gapped CI).
-#
-# New model names (current scripts, AI3.x series):
-#   denoise       → deep_denoise_cnn_AI3_6.pth
-#   sharpen       → deep_sharp_stellar_cnn_AI3_5s.pth
-#                   deep_nonstellar_sharp_cnn_radius_{1,2,4,8}AI3_5s.pth
-#   super-res     → superres_{2,3,4}x.pth
-#   darkstar      → darkstar_v2.1.pth  darkstar_v2.1c.pth
-
-CC_RELEASE="https://github.com/setiastro/cosmicclarity/releases/download/Linux"
-
-if [ -d "${COSMIC_SRC}" ]; then
-    MISSING=0
-    for model_file in \
-        "deep_denoise_cnn_AI3_6.pth" \
-        "deep_sharp_stellar_cnn_AI3_5s.pth" \
-        "deep_nonstellar_sharp_cnn_radius_1AI3_5s.pth" \
-        "deep_nonstellar_sharp_cnn_radius_2AI3_5s.pth" \
-        "deep_nonstellar_sharp_cnn_radius_4AI3_5s.pth" \
-        "deep_nonstellar_sharp_cnn_radius_8AI3_5s.pth" \
-        "superres_2x.pth" \
-        "superres_3x.pth" \
-        "superres_4x.pth" \
-        "darkstar_v2.1.pth" \
-        "darkstar_v2.1c.pth"; do
-        target="${COSMIC_SRC}/${model_file}"
-        if [ -f "${target}" ]; then
-            echo "  OK: ${model_file}"
-        else
-            echo "  Downloading missing model: ${model_file}..."
-            wget --tries=3 --timeout=120 -q \
-                "${CC_RELEASE}/${model_file}" -O "${target}" \
-            && echo "  Downloaded: ${model_file}" \
-            || { echo "  WARNING: download failed for ${model_file}"; rm -f "${target}"; MISSING=$((MISSING+1)); }
-        fi
-    done
-    if [ "${MISSING}" -eq 0 ]; then
-        echo "  All Cosmic Clarity models present in ${COSMIC_SRC}"
-    else
-        echo "  WARNING: ${MISSING} model(s) could not be downloaded — check network access."
-    fi
+# The old setiastro/cosmicclarity script bundle (archived 2026-09-16) required
+# manually downloading .pth files into this /models volume. Its replacement,
+# SASpro's `cosmicclarity` CLI (installed at build time, see Dockerfile stage
+# `ai-tools`), manages its own model weights — nothing to provision here.
+# This is only a presence check so a broken image build is caught early.
+COSMIC_CLARITY_CLI="${COSMIC_CLARITY_CLI:-cosmicclarity}"
+if command -v "${COSMIC_CLARITY_CLI}" > /dev/null 2>&1; then
+    echo "  OK: ${COSMIC_CLARITY_CLI} found on PATH"
 else
-    echo "  WARNING: Cosmic Clarity source not found at ${COSMIC_SRC}."
-    echo "  Models are loaded from that directory at runtime; ensure the image"
-    echo "  was built with network access so the Dockerfile download step ran."
+    echo "  WARNING: ${COSMIC_CLARITY_CLI} not found on PATH — is setiastrosuitepro installed?"
 fi
 
 # ── GraXpert AI model ─────────────────────────────────────────────────────────

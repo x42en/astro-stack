@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,6 +31,7 @@ from app.core.logging import get_logger
 from app.domain.job import JobStatus, JobStep, PipelineJob, StepStatus
 from app.domain.profile import ProcessingProfileConfig
 from app.domain.ws_event import (
+    AdaptiveIterationEvent,
     CompletedEvent,
     ErrorEvent,
     LogEvent,
@@ -115,6 +116,7 @@ PIPELINE_STEP_PLAN: tuple[tuple[str, str], ...] = (
     ("sharpen", "AI Sharpening / Deconvolution (Cosmic Clarity)"),
     ("super_resolution", "AI Super-Resolution 2× (Cosmic Clarity)"),
     ("star_separation", "Star Separation (Cosmic Clarity Dark Star)"),
+    ("satellite_removal", "Satellite Trail Removal (Cosmic Clarity)"),
     ("export", "Export (FITS / TIFF / JPEG / Thumbnail)"),
 )
 
@@ -180,6 +182,7 @@ class PipelineOrchestrator:
         "denoise": "denoised_path",
         "sharpen": "sharpened_path",
         "super_resolution": "superres_path",
+        "satellite_removal": "satellite_removed_path",
     }
 
     async def _maybe_generate_step_preview(
@@ -225,6 +228,93 @@ class PipelineOrchestrator:
         except Exception:  # noqa: BLE001
             logger.warning("step_preview_failed", step=step_name, exc_info=True)
             return False
+
+    async def _run_adaptive_loop_for_step(
+        self,
+        step: PipelineStep,
+        context: PipelineContext,
+        config_dict: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Run the Phase 2 adaptive vision-critic loop for one step, if eligible.
+
+        No-op (returns ``None``) unless the step is listed in
+        :data:`~app.pipeline.adaptive.tool_catalog.ADAPTIVE_STEP_FIELDS` and
+        it already produced a FITS output and a JPEG preview. Fully
+        autonomous by default — see
+        :func:`app.pipeline.adaptive.runner.run_adaptive_loop`.
+
+        Args:
+            step: The step that just completed successfully.
+            context: Pipeline context (source of the step's FITS output path).
+            config_dict: Mutable profile config dict shared by all steps.
+                Not mutated directly; the caller merges the returned patch.
+
+        Returns:
+            Adaptive-loop metadata dict (for ``JobStep.output_metadata``), or
+            ``None`` if the loop did not run for this step.
+        """
+        from app.pipeline.adaptive.tool_catalog import ADAPTIVE_STEP_FIELDS  # noqa: PLC0415
+
+        allowed_fields = ADAPTIVE_STEP_FIELDS.get(step.name)
+        if allowed_fields is None:
+            return None
+
+        from app.pipeline.adapters.siril_pyadapter import SirilPyAdapter  # noqa: PLC0415
+        from app.pipeline.adaptive.runner import run_adaptive_loop  # noqa: PLC0415
+
+        attr = self._PREVIEW_STEPS.get(step.name)
+        fits_path = getattr(context, attr, None) if attr else None
+        preview_path = self._file_store.step_preview_path(self.session_id, step.name)
+        if fits_path is None or not fits_path.exists() or not preview_path.exists():
+            return None
+
+        stats_adapter = SirilPyAdapter(work_dir=context.work_dir)
+
+        async def _get_stats(path: Any) -> dict[str, Any]:
+            try:
+                return await stats_adapter.get_image_stats(path)
+            except Exception:  # noqa: BLE001
+                logger.warning("adaptive_stats_failed", step=step.name, exc_info=True)
+                return {}
+
+        async def _run_step(new_config: dict[str, Any]) -> tuple[dict[str, Any], str]:
+            await step.execute(context, new_config)
+            new_fits_path = getattr(context, attr)
+            await self._maybe_generate_step_preview(step.name, context)
+            new_stats = await _get_stats(new_fits_path)
+            return new_stats, str(preview_path)
+
+        async def _on_iteration(record: Any) -> None:
+            event = AdaptiveIterationEvent(
+                job_id=self.job_id,
+                session_id=self.session_id,
+                step=step.name,
+                iteration=record.iteration,
+                satisfied=record.satisfied,
+                confidence=record.confidence,
+                reasoning=record.reasoning,
+                patch_applied=record.patch_applied,
+                human_approved=record.human_approved,
+            )
+            await self.event_bus.publish_job_event(self.job_id, event)
+            await self.event_bus.publish_session_event(self.session_id, event)
+
+        initial_stats = await _get_stats(fits_path)
+
+        result = await run_adaptive_loop(
+            step_name=step.name,
+            allowed_fields=allowed_fields,
+            config_dict=config_dict,
+            initial_stats=initial_stats,
+            initial_preview_path=preview_path,
+            max_iterations=self.profile_config.adaptive_critic_max_iterations,
+            require_human_approval=self.profile_config.adaptive_critic_require_human_approval,
+            run_step=_run_step,
+            on_iteration=_on_iteration,
+        )
+
+        config_dict.update(result.final_config_patch)
+        return result.to_metadata()
 
     async def run(self) -> dict[str, Any]:
         """Execute all pipeline steps in sequence, with retry and resume support.
@@ -431,9 +521,35 @@ class PipelineOrchestrator:
                 if not result.skipped:
                     has_preview = await self._maybe_generate_step_preview(step.name, context)
 
+                # Phase 2 adaptive vision-critic loop: strictly opt-in
+                # (``adaptive_critic_enabled``, default False) and only for
+                # steps listed in ADAPTIVE_STEP_FIELDS. A failure here must
+                # never break the otherwise-successful step for a novice's
+                # fully-automated run.
+                adaptive_metadata: dict[str, Any] | None = None
+                if not result.skipped and has_preview and self.profile_config.adaptive_critic_enabled:
+                    try:
+                        adaptive_metadata = await self._run_adaptive_loop_for_step(
+                            step, context, config_dict
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning("adaptive_loop_failed", step=step.name, exc_info=True)
+
                 step_result_payload: dict[str, Any] = dict(result.metadata)
                 if has_preview:
                     step_result_payload["has_preview"] = True
+                if adaptive_metadata:
+                    step_result_payload.update(adaptive_metadata)
+                    # Persist the adaptive-loop trace alongside the step's
+                    # own output metadata (the earlier upsert above ran
+                    # before the loop existed).
+                    await self._upsert_step(
+                        name=step.name,
+                        index=step_index,
+                        status=status,
+                        attempt=attempt,
+                        output_metadata={**result.metadata, **adaptive_metadata},
+                    )
 
                 step_status_event = StepStatusEvent(
                     job_id=self.job_id,
@@ -564,6 +680,7 @@ class PipelineOrchestrator:
         from app.pipeline.steps.sharpen import SharpenStep  # noqa: PLC0415
         from app.pipeline.steps.super_resolution import SuperResolutionStep  # noqa: PLC0415
         from app.pipeline.steps.star_separation import StarSeparationStep  # noqa: PLC0415
+        from app.pipeline.steps.satellite_removal import SatelliteRemovalStep  # noqa: PLC0415
         from app.pipeline.steps.export import ExportStep  # noqa: PLC0415
         from app.pipeline.adapters.cosmic_adapter import CosmicClarityAdapter  # noqa: PLC0415
         from app.pipeline.adapters.graxpert_adapter import GraXpertAdapter  # noqa: PLC0415
@@ -581,6 +698,7 @@ class PipelineOrchestrator:
             SharpenStep(adapter=cosmic_adapter),
             SuperResolutionStep(adapter=cosmic_adapter),
             StarSeparationStep(adapter=cosmic_adapter),
+            SatelliteRemovalStep(adapter=cosmic_adapter),
             ExportStep(),
         ]
 

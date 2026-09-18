@@ -32,8 +32,11 @@ dependencies = [
     # Auth
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
-    # HTTP async (Ollama)
+    # HTTP async (Ollama, vLLM adaptive critic)
     "httpx>=0.27.0",
+    # Adaptive vision-critic loop (Phase 2) — in-process state graph, no
+    # external MCP/service dependency (see app/pipeline/adaptive/).
+    "langgraph>=1.0,<2.0",
     # Astrophotography
     "astropy>=6.0.0",
     "rawpy>=0.22.0",

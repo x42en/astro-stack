@@ -22,6 +22,7 @@ from typing import Optional
 
 import numpy as np
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.domain.ws_event import (
     LiveStackFrameAcceptedEvent,
@@ -30,6 +31,7 @@ from app.domain.ws_event import (
 )
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.storage.file_store import FileStore
+from app.livestack.adaptive import apply_decision, evaluate, should_evaluate
 from app.livestack.autostretch import StretchMethod, stretch_to_uint8
 from app.livestack.preview import encode_preview_jpeg
 from app.livestack.processors import (
@@ -41,9 +43,15 @@ from app.livestack.processors import (
     read_frame,
     remove_hot_pixels,
 )
+from app.livestack.recommender import compute_histogram_stats
 from app.livestack.state import LiveStackState, LiveStackStateRepository
+from app.pipeline.adaptive.critic import VisionCritic
 
 logger = get_logger(__name__)
+
+# Matches the defaults in app.livestack.autostretch.compute_stretch_parameters.
+_DEFAULT_TARGET_BKG = 0.25
+_DEFAULT_SHADOWS_CLIP = -2.8
 
 
 class LiveStackService:
@@ -63,16 +71,28 @@ class LiveStackService:
         file_store: FileStore,
         state_repo: LiveStackStateRepository,
         event_bus: Optional[EventBus] = None,
+        critic: Optional[VisionCritic] = None,
     ) -> None:
         """Build a service bound to the provided collaborators.
 
         ``event_bus`` may be ``None`` for read-only / lifecycle calls
         (start, stop, get_state) that do not emit events. Ingestion
         requires a connected event bus.
+
+        Args:
+            file_store: Filesystem helper used to resolve live-mode paths.
+            state_repo: Redis-backed state repository.
+            event_bus: Event bus used to push WebSocket notifications.
+            critic: Optional vision critic override for the adaptive
+                autostretch tuning (mainly for tests); a default instance
+                built from application settings is used otherwise, and only
+                ever constructed/called when
+                ``Settings.live_adaptive_critic_enabled`` is True.
         """
         self._store = file_store
         self._state_repo = state_repo
         self._events = event_bus
+        self._critic = critic
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -142,6 +162,8 @@ class LiveStackService:
             state.is_running = True
 
         frame_index = state.frame_count + state.rejected_count + 1
+        target_bkg = state.adaptive_target_bkg or _DEFAULT_TARGET_BKG
+        shadows_clip = state.adaptive_shadows_clip or _DEFAULT_SHADOWS_CLIP
 
         try:
             new_state = await asyncio.to_thread(
@@ -150,6 +172,8 @@ class LiveStackService:
                 Path(frame_path),
                 state,
                 method,
+                target_bkg,
+                shadows_clip,
             )
         except (FrameReadError, AlignmentError) as exc:
             state.rejected_count += 1
@@ -195,7 +219,74 @@ class LiveStackService:
                         height=h,
                     ),
                 )
+
+        if get_settings().live_adaptive_critic_enabled:
+            new_state = await self._maybe_run_adaptive_critic(session_id, new_state)
+
         return new_state
+
+    async def _maybe_run_adaptive_critic(
+        self, session_id: uuid.UUID, state: LiveStackState
+    ) -> LiveStackState:
+        """Run one adaptive-critic evaluation for the live preview, if due.
+
+        No-op (returns ``state`` unchanged) unless
+        :func:`~app.livestack.adaptive.should_evaluate` says an evaluation is
+        due for this frame. Never raises: a failed evaluation degrades to a
+        no-op via :func:`~app.livestack.adaptive.evaluate`'s own error
+        handling, so live-stacking itself is never put at risk by this
+        opt-in feature.
+
+        Args:
+            session_id: Parent session UUID.
+            state: State just persisted after a successful frame ingestion.
+
+        Returns:
+            The (possibly updated) state, already persisted if changed.
+        """
+        settings = get_settings()
+        if not should_evaluate(
+            state,
+            warmup_frames=settings.live_adaptive_critic_warmup_frames,
+            recheck_every=settings.live_adaptive_critic_recheck_every,
+            max_attempts=settings.live_adaptive_critic_max_attempts,
+        ):
+            return state
+
+        accumulator = open_or_create_accumulator(
+            self._store.live_accumulator_path(session_id),
+            state.shape,
+            np.dtype(np.float32),
+        )
+        stats = await asyncio.to_thread(
+            compute_histogram_stats, np.asarray(accumulator), state.last_fwhm
+        )
+
+        own_critic = self._critic is None
+        critic = self._critic or VisionCritic()
+        try:
+            decision = await evaluate(
+                critic=critic,
+                preview_jpeg_path=self._store.live_preview_path(session_id),
+                stats=stats,
+                state=state,
+            )
+        finally:
+            if own_critic:
+                await critic.aclose()
+
+        apply_decision(state, decision)
+        await self._state_repo.save(state)
+        logger.info(
+            "live_adaptive_evaluated",
+            session_id=str(session_id),
+            attempt=state.adaptive_attempts,
+            satisfied=decision.satisfied,
+            converged=state.adaptive_converged,
+            target_bkg=decision.target_bkg,
+            shadows_clip=decision.shadows_clip,
+        )
+        return state
 
     # ── Sync hot path (runs in a worker thread) ───────────────────────────
 
@@ -205,11 +296,23 @@ class LiveStackService:
         frame_path: Path,
         state: LiveStackState,
         method: StretchMethod,
+        target_bkg: float,
+        shadows_clip: float,
     ) -> LiveStackState:
         """Synchronous stacking core. Returns the updated state.
 
         Side effects: updates the on-disk accumulator and rewrites the
         preview JPEG atomically.
+
+        Args:
+            session_id: Parent session UUID.
+            frame_path: Absolute path to the frame being ingested.
+            state: Current live-stack state.
+            method: Stretch algorithm for the preview (only MTF for now).
+            target_bkg: MTF autostretch target background luminance — either
+                the fixed default or the adaptive critic's tuned value.
+            shadows_clip: MTF autostretch shadows-clip multiplier — either
+                the fixed default or the adaptive critic's tuned value.
         """
         live_dir = self._store.ensure_live_dir(session_id)
         frame = read_frame(frame_path)
@@ -258,10 +361,13 @@ class LiveStackService:
         # Generate the preview from the (now updated) accumulator.
         if method is not StretchMethod.MTF:  # pragma: no cover - defensive
             raise ValueError(f"Unsupported stretch method: {method}")
-        preview_uint8 = stretch_to_uint8(np.asarray(accumulator))
+        preview_uint8 = stretch_to_uint8(
+            np.asarray(accumulator), target_bkg=target_bkg, shadows_clip=shadows_clip
+        )
         encode_preview_jpeg(preview_uint8, self._store.live_preview_path(session_id))
 
         new_state.preview_generation += 1
+        new_state.last_stretch = {"target_bkg": target_bkg, "shadows_clip": shadows_clip}
 
         # Persist a copy of the accepted frame for later batch reprocessing.
         try:
