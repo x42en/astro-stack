@@ -14,7 +14,7 @@ x-astro-common: &astro-common
     context: .
     dockerfile: Dockerfile
   # Usage in prod — swap the `build:` block above for the published image:
-  # image: ghcr.io/bitsdiver/astro-stack:latest
+  # image: ghcr.io/x42en/astro-stack:latest
   environment:
     # Application
     - APP_NAME=Astro-Stack
@@ -319,7 +319,7 @@ services:
 
   # ── Astro UI ────────────────────────────────────────────────────────────────
   astro-ui:
-    image: ghcr.io/bitsdiver/astro-ui:latest
+    image: ghcr.io/x42en/astro-ui:latest
     container_name: astro-ui
     restart: unless-stopped
     ports:
