@@ -3,8 +3,8 @@
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](./LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-async%20API-009688.svg)](https://fastapi.tiangolo.com/)
-[![Docker Image](https://img.shields.io/badge/ghcr.io-bitsdiver%2Fastro--stack-2496ED.svg)](https://github.com/bitsdiver/astro-stack/pkgs/container/astro-stack)
-[![Build & Publish](https://github.com/bitsdiver/astro-stack/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/bitsdiver/astro-stack/actions/workflows/docker-publish.yml)
+[![Docker Image](https://img.shields.io/badge/ghcr.io-x42en%2Fastro--stack-2496ED.svg)](https://github.com/x42en/astro-stack/pkgs/container/astro-stack)
+[![Build & Publish](https://github.com/x42en/astro-stack/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/x42en/astro-stack/actions/workflows/docker-publish.yml)
 
 > Automated astrophotography processing pipeline with an event-driven API backend.
 
@@ -109,7 +109,7 @@ repository.
 - **File watcher** — auto-detects newly deposited sessions in the inbox and
   triggers ingestion after a configurable stability delay.
 - **Published container image** — every push to `main`/tag builds and
-  publishes `ghcr.io/bitsdiver/astro-stack` via GitHub Actions
+  publishes `ghcr.io/x42en/astro-stack` via GitHub Actions
   (`.github/workflows/docker-publish.yml`), so a deployment doesn't need a
   local build.
 - **OAuth 2.1 / OIDC authentication** — three modes controlled by `AUTH_MODE`:
@@ -252,13 +252,13 @@ docker compose up -d
 
 #### Use the published image instead of building locally
 
-Every push to `main`/tag publishes `ghcr.io/bitsdiver/astro-stack` via
+Every push to `main`/tag publishes `ghcr.io/x42en/astro-stack` via
 GitHub Actions ([.github/workflows/docker-publish.yml](./.github/workflows/docker-publish.yml)).
 Swap the `build:` block for `astro-api`/`astro-worker-*` in `docker-compose.yml`
 for:
 
 ```yaml
-image: ghcr.io/bitsdiver/astro-stack:latest
+image: ghcr.io/x42en/astro-stack:latest
 ```
 
 #### Optional: bundled Traefik reverse proxy

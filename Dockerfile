@@ -168,8 +168,8 @@ FROM ai-tools AS final
 
 LABEL org.opencontainers.image.title="AstroStack" \
       org.opencontainers.image.description="Automated astrophotography processing pipeline with event-driven API" \
-      org.opencontainers.image.url="https://github.com/bitsdiver/astro-stack" \
-      org.opencontainers.image.source="https://github.com/bitsdiver/astro-stack" \
+      org.opencontainers.image.url="https://github.com/x42en/astro-stack" \
+      org.opencontainers.image.source="https://github.com/x42en/astro-stack" \
       org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 # Create non-root user for the application
