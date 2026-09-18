@@ -1,16 +1,20 @@
 ---
 # =============================================================================
 # Astro-Stack — Docker Compose
-# Services: astro-api, astro-worker-gpu0, astro-worker-gpu1, redis, postgres, traefik
-# Supports standalone deployment (no external dependencies required)
+# Services: astro-api, astro-worker-gpu0, astro-worker-gpu1, redis, postgres
+# Standard deployment exposes astro-api/astro-ui directly (no reverse proxy
+# required) — this is the recommended path when you already run your own
+# Traefik/nginx/Caddy in front of your Docker host. A bundled Traefik is
+# available as an opt-in profile (see the `traefik` service below) for
+# environments that don't have one yet.
 # =============================================================================
 
 x-astro-common: &astro-common
   build:
     context: .
     dockerfile: Dockerfile
-  # Usage in prod
-  # image: ghcr.io/x42en/astro-stack:latest
+  # Usage in prod — swap the `build:` block above for the published image:
+  # image: ghcr.io/bitsdiver/astro-stack:latest
   environment:
     # Application
     - APP_NAME=Astro-Stack
@@ -36,6 +40,11 @@ x-astro-common: &astro-common
     # Ollama
     - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
     - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    # vLLM adaptive critic (Phase 2) — only reached when a profile enables
+    # adaptive_critic_enabled / live_adaptive_critic_enabled (both off by default)
+    - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+    - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
+    - VLLM_API_KEY=${VLLM_API_KEY:-}
     # Storage paths (mounted volumes)
     - INBOX_PATH=/inbox
     - SESSIONS_PATH=/sessions
@@ -67,10 +76,15 @@ x-astro-common: &astro-common
     - astro-net
 
 services:
-  # ── Traefik Reverse Proxy ────────────────────────────────────────────────────
+  # ── Traefik Reverse Proxy (optional) ─────────────────────────────────────────
+  # Only starts with: docker compose --profile traefik up -d
+  # Skip this entirely if you already run a reverse proxy in front of this
+  # host — astro-api and astro-ui publish their ports directly below.
   traefik:
     image: traefik:v3
     container_name: astro-traefik
+    profiles:
+      - traefik
     command:
       - --api.insecure=true
       - --providers.docker=true
@@ -130,6 +144,10 @@ services:
     <<: *astro-common
     container_name: astro-api
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--loop", "uvloop"]
+    ports:
+      # Direct access for standard (no reverse proxy) deployments. Harmless
+      # to leave published even when the `traefik` profile is also enabled.
+      - "${API_PORT:-8080}:8080"
     environment:
       - APP_NAME=Astro-Stack
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -139,6 +157,9 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+      - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
       - INBOX_PATH=/inbox
       - SESSIONS_PATH=/sessions
       - OUTPUT_PATH=/output
@@ -187,6 +208,9 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+      - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
       - INBOX_PATH=/inbox
       - SESSIONS_PATH=/sessions
       - OUTPUT_PATH=/output
@@ -232,6 +256,9 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
+      - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
       - INBOX_PATH=/inbox
       - SESSIONS_PATH=/sessions
       - OUTPUT_PATH=/output
@@ -295,7 +322,10 @@ services:
     image: ghcr.io/bitsdiver/astro-ui:latest
     container_name: astro-ui
     restart: unless-stopped
-    # Port is intentionally not exposed — traffic arrives exclusively via Traefik.
+    ports:
+      # Direct access for standard (no reverse proxy) deployments. Remove if
+      # you only want this reachable through the `traefik` profile.
+      - "${UI_PORT:-3000}:80"
     environment:
       # VITE_* variables are baked in at build time and have no effect on the
       # pre-built image. Use the Settings page in the UI to reconfigure at runtime.
@@ -320,6 +350,25 @@ services:
       - "traefik.http.routers.astro-ui-secure.service=astro-ui-svc"
       # Backend service
       - "traefik.http.services.astro-ui-svc.loadbalancer.server.port=80"
+
+  # ── SearXNG (optional) ───────────────────────────────────────────────────────
+  # Self-hosted meta-search used by the planned reference-image search feature
+  # (Phase 2 adaptive critic — see README "Roadmap"). Not consumed by the
+  # application yet; included here so the deployment story doesn't need to
+  # change again once that feature lands. Only starts with:
+  #   docker compose --profile searxng up -d
+  searxng:
+    image: searxng/searxng:latest
+    container_name: astro-searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8888}/
+    ports:
+      - "${SEARXNG_PORT:-8888}:8080"
+    restart: unless-stopped
+    networks:
+      - astro-net
+    profiles:
+      - searxng
 
 volumes:
   postgres_data:
