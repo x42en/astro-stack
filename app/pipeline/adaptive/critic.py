@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.core.config import get_settings
 from app.core.errors import ErrorCode, PipelineStepException
 from app.core.logging import get_logger
+from app.core.observability import lf_client, lf_mark_error, lf_observation, lf_update
 
 logger = get_logger(__name__)
 
@@ -74,11 +75,11 @@ class VisionCritic:
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
-        http_client: Optional[httpx.AsyncClient] = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         """Initialise the critic client.
 
@@ -151,7 +152,7 @@ class VisionCritic:
             f"Image statistics: {json.dumps(stats)}\n"
             f"Previous iterations this run: {json.dumps(history)}\n"
         )
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -171,54 +172,157 @@ class VisionCritic:
         }
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-        try:
-            response = await self._http.post(
-                f"{self.base_url}/chat/completions", json=payload, headers=headers
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise PipelineStepException(
-                ErrorCode.PIPE_ADAPTIVE_CRITIC_UNAVAILABLE,
-                f"Vision critic request failed for step {step_name!r}: {exc}",
-                step_name=step_name,
-                retryable=False,
-            ) from exc
+        # One Langfuse generation per critic call. The traced input mirrors
+        # the exact messages sent to the model EXCEPT the image: full-res
+        # base64 (live previews can be several MB) would blow past the
+        # LANGFUSE_PREVIEW_MAX_KB budget — the image is visible on the
+        # enclosing span instead, already size-capped. No-op cost when
+        # Langfuse tracing is disabled.
+        lf_input: Any = None
+        if lf_client() is not None:
+            lf_input = _traced_messages(payload["messages"])
+        with lf_observation(
+            "vision-critic",
+            as_type="generation",
+            model=self.model,
+            input=lf_input,
+            metadata={
+                "step": step_name,
+                "iteration": iteration,
+                "max_iterations": max_iterations,
+            },
+        ) as lf_gen:
+            try:
+                response = await self._http.post(
+                    f"{self.base_url}/chat/completions", json=payload, headers=headers
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                lf_mark_error(
+                    lf_gen,
+                    f"Vision critic request failed for step {step_name!r}: {exc}",
+                )
+                raise PipelineStepException(
+                    ErrorCode.PIPE_ADAPTIVE_CRITIC_UNAVAILABLE,
+                    f"Vision critic request failed for step {step_name!r}: {exc}",
+                    step_name=step_name,
+                    retryable=False,
+                ) from exc
 
-        body = response.json()
-        try:
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise PipelineStepException(
-                ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
-                f"Vision critic response for step {step_name!r} has no message content.",
-                step_name=step_name,
-                retryable=False,
-                details={"body": body},
-            ) from exc
+            body = response.json()
+            try:
+                content = body["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError) as exc:
+                lf_mark_error(
+                    lf_gen,
+                    f"Vision critic response for step {step_name!r} has no message content.",
+                )
+                raise PipelineStepException(
+                    ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
+                    f"Vision critic response for step {step_name!r} has no message content.",
+                    step_name=step_name,
+                    retryable=False,
+                    details={"body": body},
+                ) from exc
 
-        verdict_dict = _extract_json_object(content)
-        if verdict_dict is None:
-            raise PipelineStepException(
-                ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
-                f"Vision critic response for step {step_name!r} is not valid JSON.",
-                step_name=step_name,
-                retryable=False,
-                details={"content": content[:2000]},
-            )
+            verdict_dict = _extract_json_object(content)
+            if verdict_dict is None:
+                lf_mark_error(
+                    lf_gen,
+                    f"Vision critic response for step {step_name!r} is not valid JSON.",
+                )
+                raise PipelineStepException(
+                    ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
+                    f"Vision critic response for step {step_name!r} is not valid JSON.",
+                    step_name=step_name,
+                    retryable=False,
+                    details={"content": content[:2000]},
+                )
 
-        try:
-            return CriticVerdict.model_validate(verdict_dict)
-        except ValidationError as exc:
-            raise PipelineStepException(
-                ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
-                f"Vision critic response for step {step_name!r} failed schema validation: {exc}",
-                step_name=step_name,
-                retryable=False,
-                details={"content": content[:2000]},
-            ) from exc
+            try:
+                verdict = CriticVerdict.model_validate(verdict_dict)
+            except ValidationError as exc:
+                schema_msg = (
+                    f"Vision critic response for step {step_name!r} "
+                    f"failed schema validation: {exc}"
+                )
+                lf_mark_error(lf_gen, schema_msg)
+                raise PipelineStepException(
+                    ErrorCode.PIPE_ADAPTIVE_CRITIC_INVALID_RESPONSE,
+                    schema_msg,
+                    step_name=step_name,
+                    retryable=False,
+                    details={"content": content[:2000]},
+                ) from exc
+
+            lf_update(lf_gen, output=verdict.model_dump(), usage_details=_extract_usage(body))
+            return verdict
 
 
-def _extract_json_object(text: str) -> Optional[dict[str, Any]]:
+# Bounded stand-in for the preview bytes in traced generation inputs (the
+# actual image is attached, size-capped, to the enclosing span).
+_IMAGE_PLACEHOLDER = "<image omitted from trace — see span preview>"
+
+
+def _traced_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a trace-safe copy of chat messages with images placeholder-ed.
+
+    The critic sends the preview JPEG as base64 inside the ``image_url``
+    part; that byte string can reach several megabytes for live previews,
+    so the traced copy replaces it with a bounded placeholder. The image
+    itself is attached (size-capped) to the enclosing Langfuse span.
+
+    Args:
+        messages: OpenAI-style chat messages actually sent to the model.
+
+    Returns:
+        A shallow copy safe to attach as a Langfuse generation input.
+    """
+    traced: list[dict[str, Any]] = []
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            traced.append(msg)
+            continue
+        parts: list[Any] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _IMAGE_PLACEHOLDER},
+                    }
+                )
+            else:
+                parts.append(part)
+        traced.append({**msg, "content": parts})
+    return traced
+
+
+def _extract_usage(body: dict[str, Any]) -> dict[str, int] | None:
+    """Map an OpenAI-style ``usage`` object to Langfuse ``usage_details``.
+
+    Args:
+        body: Full chat/completions response body.
+
+    Returns:
+        ``{"input": …, "output": …}`` when token counts are present, else
+        ``None`` (self-hosted vLLM builds may omit usage).
+    """
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    details: dict[str, int] = {}
+    prompt_tokens = usage.get("prompt_tokens")
+    completion_tokens = usage.get("completion_tokens")
+    if isinstance(prompt_tokens, int):
+        details["input"] = prompt_tokens
+    if isinstance(completion_tokens, int):
+        details["output"] = completion_tokens
+    return details or None
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
     """Extract the first top-level JSON object from a model response.
 
     Tolerates common LLM formatting noise (markdown code fences, leading or

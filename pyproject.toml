@@ -7,7 +7,7 @@ name = "astro-stack"
 version = "0.2.0"
 description = "Automated astrophotography processing pipeline with event-driven API"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<4.0"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "Astro-Stack Team" }]
 
@@ -57,6 +57,11 @@ dependencies = [
     "aiofiles>=23.2.0",
     "anyio>=4.4.0",
     "structlog>=24.1.0",
+    # Observability — optional Langfuse tracing (pipeline debug, vision-critic
+    # generations). Inert unless LANGFUSE_ENABLED=true with API keys set.
+    # python_version marker: the SDK caps at <4.0 while this project supports
+    # any future CPython — keep the dep installable across the whole range.
+    "langfuse>=4.0,<5.0; python_version < '4.0'",
 ]
 
 [project.optional-dependencies]

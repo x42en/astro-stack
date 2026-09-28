@@ -133,6 +133,70 @@ def _sanitize_live_patch(patch: dict[str, Any], current: LiveAdaptiveDecision) -
     return target_bkg, shadows_clip
 
 
+def current_decision(
+    state: LiveStackState,
+    *,
+    default_target_bkg: float = 0.25,
+    default_shadows_clip: float = -2.8,
+) -> LiveAdaptiveDecision:
+    """Parameters currently in effect for this live session.
+
+    Single source of truth for the fallback values (used by the critic call,
+    by patch sanitisation and by the Langfuse trace so all three always
+    agree).
+
+    Args:
+        state: Current live-stack state.
+        default_target_bkg: Fallback when no override has been set yet.
+        default_shadows_clip: Fallback when no override has been set yet.
+
+    Returns:
+        A :class:`LiveAdaptiveDecision` holding the effective parameters.
+    """
+    return LiveAdaptiveDecision(
+        target_bkg=state.adaptive_target_bkg or default_target_bkg,
+        shadows_clip=state.adaptive_shadows_clip or default_shadows_clip,
+        satisfied=False,
+        reasoning="",
+        confidence=0.0,
+    )
+
+
+def evaluation_payload(
+    current: LiveAdaptiveDecision,
+    stats: HistogramStats,
+    state: LiveStackState,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the exact ``current_values``/``live_stats`` sent to the critic.
+
+    Shared by :func:`evaluate` (which passes them to the critic) and by the
+    Langfuse span in ``LiveStackService._maybe_run_adaptive_critic`` so the
+    trace always mirrors what the model actually received.
+
+    Args:
+        current: Effective parameters (from :func:`current_decision`).
+        stats: Linear-accumulator histogram statistics for this frame.
+        state: Current live-stack state.
+
+    Returns:
+        ``(current_values, live_stats)`` as plain dicts.
+    """
+    current_values = {
+        "target_bkg": current.target_bkg,
+        "shadows_clip": current.shadows_clip,
+    }
+    live_stats = {
+        "median_r": stats.median_r,
+        "median_g": stats.median_g,
+        "median_b": stats.median_b,
+        "clip_low_pct": stats.clip_low_pct,
+        "clip_high_pct": stats.clip_high_pct,
+        "fwhm": stats.last_fwhm,
+        "frame_count": state.frame_count,
+    }
+    return current_values, live_stats
+
+
 async def evaluate(
     *,
     critic: VisionCritic,
@@ -162,27 +226,12 @@ async def evaluate(
     Returns:
         The :class:`LiveAdaptiveDecision` to apply from now on.
     """
-    current = LiveAdaptiveDecision(
-        target_bkg=state.adaptive_target_bkg or default_target_bkg,
-        shadows_clip=state.adaptive_shadows_clip or default_shadows_clip,
-        satisfied=False,
-        reasoning="",
-        confidence=0.0,
+    current = current_decision(
+        state,
+        default_target_bkg=default_target_bkg,
+        default_shadows_clip=default_shadows_clip,
     )
-
-    current_values = {
-        "target_bkg": current.target_bkg,
-        "shadows_clip": current.shadows_clip,
-    }
-    live_stats = {
-        "median_r": stats.median_r,
-        "median_g": stats.median_g,
-        "median_b": stats.median_b,
-        "clip_low_pct": stats.clip_low_pct,
-        "clip_high_pct": stats.clip_high_pct,
-        "fwhm": stats.last_fwhm,
-        "frame_count": state.frame_count,
-    }
+    current_values, live_stats = evaluation_payload(current, stats, state)
 
     try:
         verdict = await critic.critique(
