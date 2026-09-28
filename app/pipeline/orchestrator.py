@@ -28,6 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AstroStackException, ErrorCode, PipelineStepException
 from app.core.logging import get_logger
+from app.core.observability import (
+    lf_mark_error,
+    lf_observation,
+    lf_preview_data_uri,
+    lf_update,
+)
 from app.domain.job import JobStatus, JobStep, PipelineJob, StepStatus
 from app.domain.profile import ProcessingProfileConfig
 from app.domain.ws_event import (
@@ -301,17 +307,27 @@ class PipelineOrchestrator:
 
         initial_stats = await _get_stats(fits_path)
 
-        result = await run_adaptive_loop(
-            step_name=step.name,
-            allowed_fields=allowed_fields,
-            config_dict=config_dict,
-            initial_stats=initial_stats,
-            initial_preview_path=preview_path,
-            max_iterations=self.profile_config.adaptive_critic_max_iterations,
-            require_human_approval=self.profile_config.adaptive_critic_require_human_approval,
-            run_step=_run_step,
-            on_iteration=_on_iteration,
-        )
+        with lf_observation(
+            "adaptive-loop",
+            input={
+                "step": step.name,
+                "allowed_fields": list(allowed_fields),
+                "max_iterations": self.profile_config.adaptive_critic_max_iterations,
+                "initial_stats": initial_stats,
+            },
+        ) as lf_loop:
+            result = await run_adaptive_loop(
+                step_name=step.name,
+                allowed_fields=allowed_fields,
+                config_dict=config_dict,
+                initial_stats=initial_stats,
+                initial_preview_path=preview_path,
+                max_iterations=self.profile_config.adaptive_critic_max_iterations,
+                require_human_approval=self.profile_config.adaptive_critic_require_human_approval,
+                run_step=_run_step,
+                on_iteration=_on_iteration,
+            )
+            lf_update(lf_loop, output=result.to_metadata())
 
         config_dict.update(result.final_config_patch)
         return result.to_metadata()
@@ -497,134 +513,182 @@ class PipelineOrchestrator:
                 self.job_id, JobStatus.RUNNING, current_step=step.name
             )
 
-            try:
-                result = await step.execute(context, config_dict)
+            # One Langfuse span per attempt (nested under the job trace opened
+            # by the ARQ task). Input: the profile config actually used; output:
+            # the step metadata plus a downscaled JPEG preview of the result.
+            with lf_observation(
+                f"step:{step.name}",
+                input={"attempt": attempt, "profile_config": config_dict},
+            ) as lf_step:
+                try:
+                    result = await step.execute(context, config_dict)
 
-                # Step succeeded or was skipped
-                status = StepStatus.SKIPPED if result.skipped else StepStatus.SUCCESS
-                await self._upsert_step(
-                    name=step.name,
-                    index=step_index,
-                    status=status,
-                    attempt=attempt,
-                    output_metadata=result.metadata,
-                )
-
-                # Announce step completion
-                final_status = (
-                    StepStatusValue.SKIPPED if result.skipped else StepStatusValue.SUCCESS
-                )
-
-                # For steps that produce a FITS output, generate a JPEG preview
-                # in a background thread so the client can show incremental renders.
-                has_preview = False
-                if not result.skipped:
-                    has_preview = await self._maybe_generate_step_preview(step.name, context)
-
-                # Phase 2 adaptive vision-critic loop: strictly opt-in
-                # (``adaptive_critic_enabled``, default False) and only for
-                # steps listed in ADAPTIVE_STEP_FIELDS. A failure here must
-                # never break the otherwise-successful step for a novice's
-                # fully-automated run.
-                adaptive_metadata: dict[str, Any] | None = None
-                if not result.skipped and has_preview and self.profile_config.adaptive_critic_enabled:
-                    try:
-                        adaptive_metadata = await self._run_adaptive_loop_for_step(
-                            step, context, config_dict
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.warning("adaptive_loop_failed", step=step.name, exc_info=True)
-
-                step_result_payload: dict[str, Any] = dict(result.metadata)
-                if has_preview:
-                    step_result_payload["has_preview"] = True
-                if adaptive_metadata:
-                    step_result_payload.update(adaptive_metadata)
-                    # Persist the adaptive-loop trace alongside the step's
-                    # own output metadata (the earlier upsert above ran
-                    # before the loop existed).
+                    # Step succeeded or was skipped
+                    status = StepStatus.SKIPPED if result.skipped else StepStatus.SUCCESS
                     await self._upsert_step(
                         name=step.name,
                         index=step_index,
                         status=status,
                         attempt=attempt,
-                        output_metadata={**result.metadata, **adaptive_metadata},
+                        output_metadata=result.metadata,
                     )
 
-                step_status_event = StepStatusEvent(
-                    job_id=self.job_id,
-                    session_id=self.session_id,
-                    step=step.name,
-                    step_index=step_index,
-                    status=final_status,
-                    result=step_result_payload,
-                )
-                await self.event_bus.publish_job_event(self.job_id, step_status_event)
-
-                # Also publish to the session channel so the session WebSocket
-                # subscriber (used by the UI) receives step events including
-                # the has_preview flag — the job channel is NOT subscribed by
-                # the frontend session WS.
-                if has_preview:
-                    await self.event_bus.publish_session_event(
-                        self.session_id, step_status_event
+                    # Announce step completion
+                    final_status = (
+                        StepStatusValue.SKIPPED if result.skipped else StepStatusValue.SUCCESS
                     )
 
-                # Emit per-step 100% progress
-                await self.event_bus.publish_job_event(
-                    self.job_id,
-                    ProgressEvent(
+                    # For steps that produce a FITS output, generate a JPEG preview
+                    # in a background thread so the client can show incremental renders.
+                    has_preview = False
+                    if not result.skipped:
+                        has_preview = await self._maybe_generate_step_preview(step.name, context)
+
+                    # Phase 2 adaptive vision-critic loop: strictly opt-in
+                    # (``adaptive_critic_enabled``, default False) and only for
+                    # steps listed in ADAPTIVE_STEP_FIELDS. A failure here must
+                    # never break the otherwise-successful step for a novice's
+                    # fully-automated run.
+                    adaptive_metadata: dict[str, Any] | None = None
+                    if (
+                        not result.skipped
+                        and has_preview
+                        and self.profile_config.adaptive_critic_enabled
+                    ):
+                        try:
+                            adaptive_metadata = await self._run_adaptive_loop_for_step(
+                                step, context, config_dict
+                            )
+                        except Exception:  # noqa: BLE001
+                            logger.warning("adaptive_loop_failed", step=step.name, exc_info=True)
+
+                    step_result_payload: dict[str, Any] = dict(result.metadata)
+                    if has_preview:
+                        step_result_payload["has_preview"] = True
+                    if adaptive_metadata:
+                        step_result_payload.update(adaptive_metadata)
+                        # Persist the adaptive-loop trace alongside the step's
+                        # own output metadata (the earlier upsert above ran
+                        # before the loop existed).
+                        await self._upsert_step(
+                            name=step.name,
+                            index=step_index,
+                            status=status,
+                            attempt=attempt,
+                            output_metadata={**result.metadata, **adaptive_metadata},
+                        )
+
+                    # Attach the downscaled JPEG preview to the Langfuse span so
+                    # every iteration's visual result is inspectable in the trace.
+                    # Only previews travel: the RAW/FITS masters never leave the
+                    # server.
+                    if lf_step is not None:
+                        lf_update(
+                            lf_step,
+                            output={
+                                "result": step_result_payload,
+                                "preview_jpeg": (
+                                    lf_preview_data_uri(
+                                        self._file_store.step_preview_path(
+                                            self.session_id, step.name
+                                        )
+                                    )
+                                    if has_preview
+                                    else None
+                                ),
+                            },
+                        )
+
+                    step_status_event = StepStatusEvent(
                         job_id=self.job_id,
                         session_id=self.session_id,
                         step=step.name,
                         step_index=step_index,
-                        total_steps=total_steps,
-                        percent=((step_index + 1) / total_steps) * 100.0,
-                        message=result.message or f"{step.display_name} complete.",
-                    ),
-                )
+                        status=final_status,
+                        result=step_result_payload,
+                    )
+                    await self.event_bus.publish_job_event(self.job_id, step_status_event)
 
-                return result
+                    # Also publish to the session channel so the session WebSocket
+                    # subscriber (used by the UI) receives step events including
+                    # the has_preview flag — the job channel is NOT subscribed by
+                    # the frontend session WS.
+                    if has_preview:
+                        await self.event_bus.publish_session_event(
+                            self.session_id, step_status_event
+                        )
 
-            except AstroStackException as exc:
-                last_exception = exc
-                logger.warning(
-                    "step_failed",
-                    step=step.name,
-                    attempt=attempt,
-                    error_code=exc.error_code.value,
-                    message=exc.message,
-                    siril_log=(
-                        exc.details.get("siril_log") if exc.details else None
-                    ),
-                )
+                    # Emit per-step 100% progress
+                    await self.event_bus.publish_job_event(
+                        self.job_id,
+                        ProgressEvent(
+                            job_id=self.job_id,
+                            session_id=self.session_id,
+                            step=step.name,
+                            step_index=step_index,
+                            total_steps=total_steps,
+                            percent=((step_index + 1) / total_steps) * 100.0,
+                            message=result.message or f"{step.display_name} complete.",
+                        ),
+                    )
 
-                error_event = ErrorEvent(
-                    job_id=self.job_id,
-                    session_id=self.session_id,
-                    error_code=exc.error_code.value,
-                    message=exc.message,
-                    step=step.name,
-                    retryable=exc.retryable,
-                    attempt=attempt,
-                    max_attempts=self.retry_policy.max_attempts,
-                    details=exc.details,
-                )
-                await self.event_bus.publish_job_event(self.job_id, error_event)
+                    return result
 
-                # Stop immediately if the exception is explicitly non-retryable
-                # (e.g. unsupported Siril parameter, disk full) regardless of
-                # the error-code-level retry policy.
-                if not exc.retryable or not self.retry_policy.should_retry(exc.error_code, attempt):
-                    break
+                except AstroStackException as exc:
+                    last_exception = exc
+                    logger.warning(
+                        "step_failed",
+                        step=step.name,
+                        attempt=attempt,
+                        error_code=exc.error_code.value,
+                        message=exc.message,
+                        siril_log=(
+                            exc.details.get("siril_log") if exc.details else None
+                        ),
+                    )
 
-                await self._upsert_step(
-                    name=step.name,
-                    index=step_index,
-                    status=StepStatus.RETRYING,
-                    attempt=attempt,
-                )
-                await self.retry_policy.wait(attempt)
+                    if lf_step is not None:
+                        lf_update(
+                            lf_step,
+                            metadata={
+                                "error_code": exc.error_code.value,
+                                "siril_log": (
+                                    str(exc.details.get("siril_log"))[:8000]
+                                    if exc.details and exc.details.get("siril_log")
+                                    else None
+                                ),
+                            },
+                        )
+                        lf_mark_error(lf_step, f"[{exc.error_code.value}] {exc.message}")
+
+                    error_event = ErrorEvent(
+                        job_id=self.job_id,
+                        session_id=self.session_id,
+                        error_code=exc.error_code.value,
+                        message=exc.message,
+                        step=step.name,
+                        retryable=exc.retryable,
+                        attempt=attempt,
+                        max_attempts=self.retry_policy.max_attempts,
+                        details=exc.details,
+                    )
+                    await self.event_bus.publish_job_event(self.job_id, error_event)
+
+                    # Stop immediately if the exception is explicitly non-retryable
+                    # (e.g. unsupported Siril parameter, disk full) regardless of
+                    # the error-code-level retry policy.
+                    if not exc.retryable or not self.retry_policy.should_retry(
+                        exc.error_code, attempt
+                    ):
+                        break
+
+                    await self._upsert_step(
+                        name=step.name,
+                        index=step_index,
+                        status=StepStatus.RETRYING,
+                        attempt=attempt,
+                    )
+                    await self.retry_policy.wait(attempt)
 
         # All attempts exhausted
         await self._upsert_step(

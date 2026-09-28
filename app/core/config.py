@@ -105,6 +105,30 @@ class Settings(BaseSettings):
     vllm_api_key: str = ""
     vllm_timeout_seconds: float = Field(default=120.0, gt=0.0)
 
+    # ── Langfuse observability (optional, external instance) ─────────────────
+    # Sends pipeline traces (one trace per job, one span per step attempt, one
+    # generation per vision-critic call) to a self-hosted Langfuse deployment.
+    # Only JPEG *previews* (downscaled, size-capped) are ever attached — the
+    # multi-hundred-megabyte RAW/FITS masters never leave the server.
+    # Disabled by default; enabling requires both API keys.
+    langfuse_enabled: bool = False
+    langfuse_base_url: str = "http://langfuse:3000"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Export client timeout in seconds (OTLP upload).
+    langfuse_timeout_seconds: float = Field(default=10.0, gt=0.0)
+    # Attach a downscaled JPEG preview of each step output to its span.
+    langfuse_attach_previews: bool = True
+    # Longest edge (px) of the preview attached to Langfuse. The pipeline
+    # previews for the UI are 900px; Langfuse copies are downscaled further
+    # to keep a whole debug session in the low-megabyte range.
+    langfuse_preview_max_px: int = Field(default=512, ge=64, le=2048)
+    # Hard budget per attached preview (KB). Oversized JPEGs are progressively
+    # downscaled/re-compressed; previews that still exceed the budget after
+    # the last pass are dropped rather than flooding the trace store.
+    langfuse_preview_max_kb: int = Field(default=400, ge=50, le=4096)
+
     # ── Live-stacking adaptive critic ─────────────────────────────────────────
     # Applies the same vision critic to the live-stacking preview loop: once
     # enough accepted frames exist, the critic tunes the MTF autostretch

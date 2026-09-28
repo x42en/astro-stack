@@ -18,12 +18,19 @@ import asyncio
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.observability import (
+    lf_attributes,
+    lf_observation,
+    lf_preview_data_uri,
+    lf_trace_id,
+    lf_update,
+    livestack_trace_seed,
+)
 from app.domain.ws_event import (
     LiveStackFrameAcceptedEvent,
     LiveStackFrameRejectedEvent,
@@ -31,7 +38,13 @@ from app.domain.ws_event import (
 )
 from app.infrastructure.queue.events_bus import EventBus
 from app.infrastructure.storage.file_store import FileStore
-from app.livestack.adaptive import apply_decision, evaluate, should_evaluate
+from app.livestack.adaptive import (
+    apply_decision,
+    current_decision,
+    evaluate,
+    evaluation_payload,
+    should_evaluate,
+)
 from app.livestack.autostretch import StretchMethod, stretch_to_uint8
 from app.livestack.preview import encode_preview_jpeg
 from app.livestack.processors import (
@@ -70,8 +83,8 @@ class LiveStackService:
         self,
         file_store: FileStore,
         state_repo: LiveStackStateRepository,
-        event_bus: Optional[EventBus] = None,
-        critic: Optional[VisionCritic] = None,
+        event_bus: EventBus | None = None,
+        critic: VisionCritic | None = None,
     ) -> None:
         """Build a service bound to the provided collaborators.
 
@@ -117,7 +130,7 @@ class LiveStackService:
         await self._state_repo.save(state)
         return state
 
-    async def stop(self, session_id: uuid.UUID) -> Optional[LiveStackState]:
+    async def stop(self, session_id: uuid.UUID) -> LiveStackState | None:
         """Pause live-stacking. Persisted artefacts are kept on disk."""
         state = await self._state_repo.get(str(session_id))
         if state is None:
@@ -126,7 +139,7 @@ class LiveStackService:
         await self._state_repo.save(state)
         return state
 
-    async def get_state(self, session_id: uuid.UUID) -> Optional[LiveStackState]:
+    async def get_state(self, session_id: uuid.UUID) -> LiveStackState | None:
         """Return the current state for ``session_id`` or ``None``."""
         return await self._state_repo.get(str(session_id))
 
@@ -265,12 +278,49 @@ class LiveStackService:
         own_critic = self._critic is None
         critic = self._critic or VisionCritic()
         try:
-            decision = await evaluate(
-                critic=critic,
-                preview_jpeg_path=self._store.live_preview_path(session_id),
-                stats=stats,
-                state=state,
-            )
+            # One span per live-critic evaluation, all sharing a single
+            # per-session trace (deterministic ID) so the whole live session's
+            # tuning history reads top-to-bottom in Langfuse. The nested
+            # generation is emitted by VisionCritic.critique itself. The span
+            # input reuses the exact payload builder sent to the critic, so
+            # the trace always shows the values the model actually received.
+            current = current_decision(state)
+            current_values, live_stats = evaluation_payload(current, stats, state)
+            with lf_observation(
+                "livestack-critic",
+                trace_id=lf_trace_id(livestack_trace_seed(session_id)),
+                input={
+                    "session_id": str(session_id),
+                    "frame_count": state.frame_count,
+                    "attempt": state.adaptive_attempts,
+                    "current_values": current_values,
+                    "stats": live_stats,
+                },
+            ) as lf_eval:
+                with lf_attributes(session_id=str(session_id), tags=["livestack"]):
+                    decision = await evaluate(
+                        critic=critic,
+                        preview_jpeg_path=self._store.live_preview_path(session_id),
+                        stats=stats,
+                        state=state,
+                    )
+                # The live preview is full-resolution (several MB): encode it
+                # off the event loop, and only after the critic call so a slow
+                # encode never delays the evaluation itself.
+                preview_uri = await asyncio.to_thread(
+                    lf_preview_data_uri, self._store.live_preview_path(session_id)
+                )
+                lf_update(
+                    lf_eval,
+                    output={
+                        "satisfied": decision.satisfied,
+                        "confidence": decision.confidence,
+                        "reasoning": decision.reasoning,
+                        "target_bkg": decision.target_bkg,
+                        "shadows_clip": decision.shadows_clip,
+                    },
+                    metadata={"preview_jpeg": preview_uri},
+                )
         finally:
             if own_critic:
                 await critic.aclose()
@@ -332,7 +382,7 @@ class LiveStackService:
             accumulator[:] = frame.astype(np.float32, copy=False)
             accumulator.flush()
             aligned = frame
-            fwhm: Optional[float] = None
+            fwhm: float | None = None
             new_state = replace(
                 state,
                 accumulator_path=str(self._store.live_accumulator_path(session_id)),

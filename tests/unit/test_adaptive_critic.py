@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 
+from app.core import observability
 from app.core.errors import ErrorCode, PipelineStepException
 from app.pipeline.adaptive.critic import CriticVerdict, VisionCritic, _extract_json_object
+from tests.unit.test_observability import FakeClient
 
 
 def _preview_path(tmp_path: Path) -> Path:
@@ -199,3 +203,126 @@ class TestVisionCriticCritique:
 
         image_part = next(p for p in captured["content"] if p["type"] == "image_url")
         assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+class TestVisionCriticLangfuseGeneration:
+    """The critic must emit one Langfuse generation per call — and never let
+    Langfuse itself break the critique flow (see app.core.observability)."""
+
+    @pytest.mark.asyncio
+    async def test_success_records_generation_with_usage(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeClient()
+        monkeypatch.setattr(observability, "_client", fake)
+        payload = {
+            "satisfied": False,
+            "confidence": 0.6,
+            "reasoning": "Too dim.",
+            "patch": {"stretch_strength": 180.0},
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = {
+                "choices": [{"message": {"content": json.dumps(payload)}}],
+                "usage": {"prompt_tokens": 1200, "completion_tokens": 45},
+            }
+            return httpx.Response(200, json=body)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            critic = VisionCritic(
+                base_url="https://vllm.test/v1", model="test-model", http_client=http
+            )
+            verdict = await critic.critique(
+                step_name="stretch_color",
+                iteration=1,
+                max_iterations=3,
+                capability_context="cap",
+                current_values={"stretch_strength": 150.0},
+                stats={"mean": 0.2},
+                preview_jpeg_path=_preview_path(tmp_path),
+                history=[],
+            )
+
+        assert verdict.patch == {"stretch_strength": 180.0}
+        assert len(fake.started) == 1
+        started = fake.started[0]
+        assert started["as_type"] == "generation"
+        assert started["model"] == "test-model"
+        assert started["metadata"] == {
+            "step": "stretch_color",
+            "iteration": 1,
+            "max_iterations": 3,
+        }
+        # Input carries the exact messages sent to the model (image included).
+        assert any(
+            part["type"] == "image_url" for part in started["input"][1]["content"]
+        )
+        gen = fake.observations[0]
+        final_update = gen.updates[-1]
+        assert final_update["output"]["satisfied"] is False
+        assert final_update["usage_details"] == {"input": 1200, "output": 45}
+
+    @pytest.mark.asyncio
+    async def test_http_error_marks_generation_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeClient()
+        monkeypatch.setattr(observability, "_client", fake)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, text="down")
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            critic = VisionCritic(base_url="https://vllm.test/v1", model="m", http_client=http)
+            with pytest.raises(PipelineStepException):
+                await critic.critique(
+                    step_name="denoise",
+                    iteration=0,
+                    max_iterations=2,
+                    capability_context="",
+                    current_values={},
+                    stats={},
+                    preview_jpeg_path=_preview_path(tmp_path),
+                    history=[],
+                )
+
+        gen = fake.observations[0]
+        assert any(u.get("level") == "ERROR" for u in gen.updates)
+
+    @pytest.mark.asyncio
+    async def test_broken_langfuse_client_never_breaks_critique(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A Langfuse SDK failure must be invisible to the pipeline."""
+        payload = {"satisfied": True, "confidence": 0.9, "reasoning": "ok", "patch": {}}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=_chat_response(json.dumps(payload)))
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            critic = VisionCritic(base_url="https://vllm.test/v1", model="m", http_client=http)
+
+            def broken_start(**kwargs: Any) -> Any:
+                raise RuntimeError("langfuse sdk exploded")
+
+            fake = SimpleNamespace()
+            monkeypatch.setattr(observability, "_client", fake)
+            monkeypatch.setattr(
+                fake, "start_as_current_observation", broken_start, raising=False
+            )
+            verdict = await critic.critique(
+                step_name="denoise",
+                iteration=0,
+                max_iterations=2,
+                capability_context="",
+                current_values={},
+                stats={},
+                preview_jpeg_path=_preview_path(tmp_path),
+                history=[],
+            )
+
+        assert verdict.satisfied is True
