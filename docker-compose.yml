@@ -37,14 +37,23 @@ x-astro-common: &astro-common
     - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
     # Redis
     - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-    # Ollama
+    # Ollama (local LLM stack, switchable models)
     - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-    - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-vl:8b}
+    - OLLAMA_TIMEOUT_SECONDS=${OLLAMA_TIMEOUT_SECONDS:-120}
+    # LLM provider selection (ollama | vllm | kilo | custom)
+    - LLM_ACTIVE_PROVIDER=${LLM_ACTIVE_PROVIDER:-vllm}
     # vLLM adaptive critic (Phase 2) — only reached when a profile enables
     # adaptive_critic_enabled / live_adaptive_critic_enabled (both off by default)
     - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
     - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
     - VLLM_API_KEY=${VLLM_API_KEY:-}
+    - VLLM_TIMEOUT_SECONDS=${VLLM_TIMEOUT_SECONDS:-120}
+    # Kilo AI Gateway (external, OpenAI-compatible) — offloads GPU load
+    - KILO_BASE_URL=${KILO_BASE_URL:-https://api.kilo.ai/api/gateway}
+    - KILO_MODEL=${KILO_MODEL:-qwen/qwen3.8-27b:free}
+    - KILO_API_KEY=${KILO_API_KEY:-}
+    - KILO_TIMEOUT_SECONDS=${KILO_TIMEOUT_SECONDS:-120}
     # Langfuse observability — external instance, no local service. Traces are
     # emitted only when LANGFUSE_ENABLED=true with both API keys set.
     - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
@@ -166,10 +175,14 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-vl:8b}
+      - LLM_ACTIVE_PROVIDER=${LLM_ACTIVE_PROVIDER:-vllm}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
       - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
       - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - KILO_BASE_URL=${KILO_BASE_URL:-https://api.kilo.ai/api/gateway}
+      - KILO_MODEL=${KILO_MODEL:-qwen/qwen3.8-27b:free}
+      - KILO_API_KEY=${KILO_API_KEY:-}
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse:3000}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
@@ -226,9 +239,14 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-vl:8b}
+      - LLM_ACTIVE_PROVIDER=${LLM_ACTIVE_PROVIDER:-vllm}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
       - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
       - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - KILO_BASE_URL=${KILO_BASE_URL:-https://api.kilo.ai/api/gateway}
+      - KILO_MODEL=${KILO_MODEL:-qwen/qwen3.8-27b:free}
+      - KILO_API_KEY=${KILO_API_KEY:-}
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse:3000}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
@@ -282,9 +300,14 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://astro:astro@postgres:5432/astrostack}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3-vl:8b}
+      - LLM_ACTIVE_PROVIDER=${LLM_ACTIVE_PROVIDER:-vllm}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://vllm:8000/v1}
       - VLLM_MODEL=${VLLM_MODEL:-lagarde-vllm}
       - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - KILO_BASE_URL=${KILO_BASE_URL:-https://api.kilo.ai/api/gateway}
+      - KILO_MODEL=${KILO_MODEL:-qwen/qwen3.8-27b:free}
+      - KILO_API_KEY=${KILO_API_KEY:-}
       - LANGFUSE_ENABLED=${LANGFUSE_ENABLED:-false}
       - LANGFUSE_BASE_URL=${LANGFUSE_BASE_URL:-http://langfuse:3000}
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}

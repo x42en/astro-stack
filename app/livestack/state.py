@@ -75,6 +75,9 @@ class LiveStackState:
         adaptive_history: Ordered list of past evaluation records (for
             display/debugging) — small, capped implicitly by
             ``adaptive_attempts``' hard limit.
+        adaptive_llm_provider: Per-session LLM provider override for the live
+            critic (``None`` = configured active provider).
+        adaptive_llm_model: Per-session LLM model override (``None`` = default).
     """
 
     session_id: str
@@ -97,6 +100,8 @@ class LiveStackState:
     adaptive_converged: bool = False
     adaptive_last_evaluated_frame_count: int = 0
     adaptive_history: list[dict] = field(default_factory=list)
+    adaptive_llm_provider: Optional[str] = None
+    adaptive_llm_model: Optional[str] = None
 
     def to_json(self) -> str:
         """Serialise to a JSON string for Redis storage."""

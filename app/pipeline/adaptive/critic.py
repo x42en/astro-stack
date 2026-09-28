@@ -1,9 +1,14 @@
 """Vision-language critic client for the Phase 2 adaptive processing loop.
 
-Talks to an OpenAI-compatible ``/chat/completions`` endpoint (the verified
-target is a self-hosted vLLM server, see repository memory notes) with a
-JPEG preview image plus numeric stats, and asks it to judge whether a
-pipeline step's output is acceptable or should be refined further.
+Talks to an OpenAI-compatible ``/chat/completions`` endpoint with a JPEG
+preview image plus numeric stats, and asks it to judge whether a pipeline
+step's output is acceptable or should be refined further.
+
+Provider-agnostic: the endpoint is resolved via :mod:`app.llm.factory`
+(Ollama for a local stack, vLLM for one fast-served model, Kilo Gateway for
+switchable external models). Every interaction goes through
+:class:`~app.llm.client.LLMClient` so chat, recommenders and future LLM
+workflows share one contract.
 """
 
 from __future__ import annotations
@@ -16,10 +21,11 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from app.core.config import get_settings
 from app.core.errors import ErrorCode, PipelineStepException
 from app.core.logging import get_logger
 from app.core.observability import lf_client, lf_mark_error, lf_observation, lf_update
+from app.llm.client import LLMClient
+from app.llm.factory import resolve_llm_profile
 
 logger = get_logger(__name__)
 
@@ -67,9 +73,12 @@ _SYSTEM_PROMPT = (
 class VisionCritic:
     """Calls an OpenAI-compatible vision-language model to critique a step output.
 
+    Provider-agnostic wrapper over :class:`~app.llm.client.LLMClient`.
+
     Attributes:
+        provider: Provider key (``ollama`` | ``vllm`` | ``kilo`` | ``custom``).
         base_url: Base URL of the OpenAI-compatible API (including ``/v1``).
-        model: Model name to request (vLLM's ``--served-model-name``).
+        model: Model name to request (``provider/model`` for Kilo).
         timeout: Request timeout in seconds.
     """
 
@@ -80,32 +89,44 @@ class VisionCritic:
         api_key: str | None = None,
         timeout: float | None = None,
         http_client: httpx.AsyncClient | None = None,
+        provider: str | None = None,
+        app_settings: object | None = None,
     ) -> None:
         """Initialise the critic client.
 
         Args:
-            base_url: Base URL of the OpenAI-compatible API; defaults to
-                ``Settings.vllm_base_url``.
-            model: Model name; defaults to ``Settings.vllm_model``.
-            api_key: Bearer token; defaults to ``Settings.vllm_api_key``
+            base_url: Base URL of the OpenAI-compatible API; defaults to the
+                resolved active provider's URL.
+            model: Model name; defaults to the resolved active provider's model.
+            api_key: Bearer token; defaults to the resolved provider's key
                 (empty string means no ``Authorization`` header is sent).
-            timeout: Request timeout in seconds; defaults to
-                ``Settings.vllm_timeout_seconds``.
+            timeout: Request timeout in seconds; defaults to the resolved
+                provider's timeout.
             http_client: Optional pre-configured client (for tests/DI); a new
                 one is created and owned by this instance otherwise.
+            provider: Explicit provider override (``None``/``"default"`` = use
+                the configured active provider from DB settings, else env).
+            app_settings: Optional ``AppSettings`` row for DB-configured
+                defaults (operator-selected active provider).
         """
-        settings = get_settings()
-        self.base_url = (base_url or settings.vllm_base_url).rstrip("/")
-        self.model = model or settings.vllm_model
-        self.api_key = settings.vllm_api_key if api_key is None else api_key
-        self.timeout = timeout if timeout is not None else settings.vllm_timeout_seconds
-        self._http = http_client or httpx.AsyncClient(timeout=self.timeout)
-        self._owns_http = http_client is None
+        profile = resolve_llm_profile(provider, model, app_settings=app_settings)
+        self.provider = profile.provider
+        self.base_url = (base_url or profile.base_url).rstrip("/")
+        self.model = model or profile.model
+        resolved_key = profile.api_key if api_key is None else api_key
+        self.api_key = resolved_key
+        resolved_timeout = profile.timeout_seconds if timeout is None else timeout
+        self.timeout = resolved_timeout
+        self._client = LLMClient(profile, http_client=http_client)
+        # Keep the explicit overrides visible on the shared profile.
+        self._client.profile.base_url = self.base_url
+        self._client.profile.model = self.model
+        self._client.profile.api_key = self.api_key
+        self._client.profile.timeout_seconds = self.timeout
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client if it was created internally."""
-        if self._owns_http:
-            await self._http.aclose()
+        await self._client.aclose()
 
     async def critique(
         self,
@@ -152,25 +173,19 @@ class VisionCritic:
             f"Image statistics: {json.dumps(stats)}\n"
             f"Previous iterations this run: {json.dumps(history)}\n"
         )
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                        },
-                    ],
-                },
-            ],
-            "temperature": 0.2,
-            "max_tokens": 800,
-        }
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                    },
+                ],
+            },
+        ]
 
         # One Langfuse generation per critic call. The traced input mirrors
         # the exact messages sent to the model EXCEPT the image: full-res
@@ -180,7 +195,7 @@ class VisionCritic:
         # Langfuse tracing is disabled.
         lf_input: Any = None
         if lf_client() is not None:
-            lf_input = _traced_messages(payload["messages"])
+            lf_input = _traced_messages(messages)
         with lf_observation(
             "vision-critic",
             as_type="generation",
@@ -190,13 +205,13 @@ class VisionCritic:
                 "step": step_name,
                 "iteration": iteration,
                 "max_iterations": max_iterations,
+                "llm_provider": self.provider,
             },
         ) as lf_gen:
             try:
-                response = await self._http.post(
-                    f"{self.base_url}/chat/completions", json=payload, headers=headers
+                body = await self._client.chat_completions(
+                    messages, temperature=0.2, max_tokens=800
                 )
-                response.raise_for_status()
             except httpx.HTTPError as exc:
                 lf_mark_error(
                     lf_gen,
@@ -209,10 +224,8 @@ class VisionCritic:
                     retryable=False,
                 ) from exc
 
-            body = response.json()
-            try:
-                content = body["choices"][0]["message"]["content"]
-            except (KeyError, IndexError, TypeError) as exc:
+            content = LLMClient.extract_content(body)
+            if content is None:
                 lf_mark_error(
                     lf_gen,
                     f"Vision critic response for step {step_name!r} has no message content.",
@@ -223,7 +236,7 @@ class VisionCritic:
                     step_name=step_name,
                     retryable=False,
                     details={"body": body},
-                ) from exc
+                )
 
             verdict_dict = _extract_json_object(content)
             if verdict_dict is None:

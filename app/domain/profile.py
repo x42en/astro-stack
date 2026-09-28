@@ -86,6 +86,11 @@ class ProcessingProfileConfig(SQLModel):
         adaptive_critic_max_iterations: Iteration budget for the critic loop.
         adaptive_critic_require_human_approval: Gate critic patches behind
             external approval instead of applying them automatically.
+        adaptive_llm_provider: LLM provider override for the critic loop
+            (``default`` = configured active provider, else ``ollama`` |
+            ``vllm`` | ``kilo`` | ``custom``).
+        adaptive_llm_model: Model override for the critic loop (``None`` =
+            provider default, e.g. a ``provider/model`` id for Kilo).
     """
 
     # ── Stacking ──────────────────────────────────────────────────────────────
@@ -276,6 +281,12 @@ class ProcessingProfileConfig(SQLModel):
     # fully autonomous end-to-end, matching the novice-friendly product goal;
     # advanced users may opt into a review gate per profile.
     adaptive_critic_require_human_approval: bool = False
+    # Per-profile LLM override for the vision-critic loop. ``"default"``
+    # follows the operator-configured active provider (AppSettings/env);
+    # any other value pins this profile to one provider. ``adaptive_llm_model``
+    # optionally pins the model (e.g. ``qwen/qwen3.8-27b:free`` on Kilo).
+    adaptive_llm_provider: str = "default"
+    adaptive_llm_model: Optional[str] = None
 
 
 # Built-in preset configurations ──────────────────────────────────────────────

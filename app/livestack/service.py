@@ -109,15 +109,22 @@ class LiveStackService:
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def start(self, session_id: uuid.UUID) -> LiveStackState:
+    async def start(
+        self, session_id: uuid.UUID, *, llm_provider: str | None = None, llm_model: str | None = None
+    ) -> LiveStackState:
         """Mark a session as actively live-stacking.
 
         Initialises the on-disk live directory and persists a fresh
         :class:`LiveStackState` if none exists. Idempotent — calling
-        it on an already-running session is a no-op.
+        it on an already-running session is a no-op. The per-session LLM
+        override is (re)applied on every start so the user can switch
+        providers between sessions.
 
         Args:
             session_id: UUID of the parent session.
+            llm_provider: Per-session LLM provider override for the live
+                vision critic (``None`` keeps the stored value).
+            llm_model: Per-session LLM model override (``None`` keeps it).
 
         Returns:
             The current (possibly new) live-stack state.
@@ -126,6 +133,10 @@ class LiveStackService:
         state = await self._state_repo.get(str(session_id))
         if state is None:
             state = LiveStackState(session_id=str(session_id))
+        if llm_provider is not None:
+            state.adaptive_llm_provider = llm_provider
+        if llm_model is not None:
+            state.adaptive_llm_model = llm_model
         state.is_running = True
         await self._state_repo.save(state)
         return state
@@ -276,7 +287,13 @@ class LiveStackService:
         )
 
         own_critic = self._critic is None
-        critic = self._critic or VisionCritic()
+        if self._critic is not None:
+            critic = self._critic
+        else:
+            critic = VisionCritic(
+                provider=state.adaptive_llm_provider,
+                model=state.adaptive_llm_model,
+            )
         try:
             # One span per live-critic evaluation, all sharing a single
             # per-session trace (deterministic ID) so the whole live session's
@@ -295,6 +312,8 @@ class LiveStackService:
                     "attempt": state.adaptive_attempts,
                     "current_values": current_values,
                     "stats": live_stats,
+                    "llm_provider": getattr(critic, "provider", None),
+                    "llm_model": getattr(critic, "model", None),
                 },
             ) as lf_eval:
                 with lf_attributes(session_id=str(session_id), tags=["livestack"]):

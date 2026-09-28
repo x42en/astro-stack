@@ -25,8 +25,14 @@ class AppSettings(SQLModel, table=True):
     Attributes:
         id: Always 1 — enforces the singleton pattern at DB level.
         inbox_path: Host path watched by the file watcher for new sessions.
-        ollama_url: Base URL of the Ollama REST API (AI gradient removal).
-        ollama_model: Ollama model name used for gradient removal inference.
+        ollama_url: Base URL of the Ollama REST API (local LLM stack).
+        ollama_model: Ollama model name for vision-critic inference.
+        llm_active_provider: Active LLM provider (``ollama`` | ``vllm`` | ``kilo``).
+        llm_ollama_url: Operator-configured Ollama base URL override.
+        llm_ollama_model: Operator-configured Ollama model override.
+        llm_vllm_base_url: Operator-configured vLLM endpoint override.
+        llm_vllm_model: Operator-configured vLLM model override.
+        llm_kilo_model: Operator-configured Kilo model id (``provider/model``).
         pipeline_max_retries: Default maximum retry count for failed pipeline steps.
         session_stability_delay: Seconds to wait after the last file write before
             considering a new session stable and ready for auto-processing.
@@ -53,8 +59,32 @@ class AppSettings(SQLModel, table=True):
         ),
     )
     ollama_model: str = Field(
-        default="llama3.2",
-        sa_column=Column(String(128), nullable=False, server_default="llama3.2"),
+        default="qwen3-vl:8b",
+        sa_column=Column(String(128), nullable=False, server_default="qwen3-vl:8b"),
+    )
+    llm_active_provider: str = Field(
+        default="vllm",
+        sa_column=Column(String(32), nullable=False, server_default="vllm"),
+    )
+    llm_ollama_url: str = Field(
+        default="",
+        sa_column=Column(String(512), nullable=False, server_default=""),
+    )
+    llm_ollama_model: str = Field(
+        default="",
+        sa_column=Column(String(128), nullable=False, server_default=""),
+    )
+    llm_vllm_base_url: str = Field(
+        default="",
+        sa_column=Column(String(512), nullable=False, server_default=""),
+    )
+    llm_vllm_model: str = Field(
+        default="",
+        sa_column=Column(String(128), nullable=False, server_default=""),
+    )
+    llm_kilo_model: str = Field(
+        default="",
+        sa_column=Column(String(128), nullable=False, server_default=""),
     )
     pipeline_max_retries: int = Field(
         default=3,
@@ -88,6 +118,12 @@ class AppSettingsRead(SQLModel):
     inbox_path: str
     ollama_url: str
     ollama_model: str
+    llm_active_provider: str
+    llm_ollama_url: str
+    llm_ollama_model: str
+    llm_vllm_base_url: str
+    llm_vllm_model: str
+    llm_kilo_model: str
     pipeline_max_retries: int
     session_stability_delay: float
     updated_at: datetime
@@ -100,5 +136,38 @@ class AppSettingsUpdate(SQLModel):
     inbox_path: Optional[str] = None
     ollama_url: Optional[str] = None
     ollama_model: Optional[str] = None
+    llm_active_provider: Optional[str] = None
+    llm_ollama_url: Optional[str] = None
+    llm_ollama_model: Optional[str] = None
+    llm_vllm_base_url: Optional[str] = None
+    llm_vllm_model: Optional[str] = None
+    llm_kilo_model: Optional[str] = None
     pipeline_max_retries: Optional[int] = Field(default=None, ge=0, le=10)
     session_stability_delay: Optional[float] = Field(default=None, ge=1.0, le=300.0)
+
+
+class LlmProfileInfo(SQLModel):
+    """Public descriptor for one LLM provider — keys are never exposed."""
+
+    provider: str
+    display_name: str
+    base_url: str
+    model: str
+    has_api_key: bool
+    is_active: bool
+
+
+class LlmSettingsRead(SQLModel):
+    """LLM provider overview — returned by GET /api/v1/settings/llm."""
+
+    active_provider: str
+    profiles: list[LlmProfileInfo]
+
+
+class LlmModelEntry(SQLModel):
+    """One model id advertised by a provider's ``/models`` endpoint."""
+
+    id: str
+    name: Optional[str] = None
+    vision: Optional[bool] = None
+    free: Optional[bool] = None

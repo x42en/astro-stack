@@ -42,6 +42,8 @@ class JobService:
         session_id: uuid.UUID,
         preset: ProfilePreset = ProfilePreset.STANDARD,
         profile_id: uuid.UUID | None = None,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> PipelineJob:
         """Create a pipeline job and enqueue it with ARQ.
 
@@ -51,6 +53,9 @@ class JobService:
             session_id: UUID of the session to process.
             preset: Which processing preset to apply.
             profile_id: UUID of a saved advanced profile (required if preset is ADVANCED).
+            llm_provider: Per-job LLM provider override for the vision critic
+                (``None`` = profile, then active provider).
+            llm_model: Per-job LLM model override.
 
         Returns:
             The created :class:`~app.domain.job.PipelineJob` record.
@@ -85,6 +90,13 @@ class JobService:
         # creation time means later edits to the saved profile do not
         # silently rewrite history.
         profile_config = await self._resolve_profile_config(preset, profile_id)
+        # Per-job LLM override wins over the profile's own pinning; the
+        # effective values travel inside the profile snapshot so the job
+        # stays reproducible, and are forwarded to the ARQ task explicitly.
+        if llm_provider is not None:
+            profile_config.adaptive_llm_provider = llm_provider
+        if llm_model is not None:
+            profile_config.adaptive_llm_model = llm_model
         job.profile_snapshot = profile_config.model_dump()
         created = await self._job_repo.create(job)
 
@@ -96,13 +108,21 @@ class JobService:
                 str(created.id),
                 str(session_id),
                 profile_config.model_dump(),
+                llm_provider,
+                llm_model,
             )
             if arq_job:
                 await self._job_repo.update(created.id, {"arq_job_id": arq_job.job_id})
         finally:
             await arq_pool.aclose()
 
-        logger.info("job_enqueued", job_id=str(created.id), preset=preset.value)
+        logger.info(
+            "job_enqueued",
+            job_id=str(created.id),
+            preset=preset.value,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+        )
         return created
 
     async def get_job_with_steps(self, job_id: uuid.UUID) -> JobRead:

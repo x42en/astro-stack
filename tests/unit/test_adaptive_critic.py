@@ -254,6 +254,7 @@ class TestVisionCriticLangfuseGeneration:
             "step": "stretch_color",
             "iteration": 1,
             "max_iterations": 3,
+            "llm_provider": "vllm",
         }
         # Input carries the exact messages sent to the model (image included).
         assert any(

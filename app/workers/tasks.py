@@ -46,6 +46,8 @@ async def run_pipeline(
     job_id_str: str,
     session_id_str: str,
     profile_config_dict: dict[str, Any],
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict[str, Any]:
     """ARQ task: execute the full astrophotography processing pipeline.
 
@@ -58,6 +60,8 @@ async def run_pipeline(
         job_id_str: UUID string of the pipeline job.
         session_id_str: UUID string of the associated session.
         profile_config_dict: Serialised :class:`~app.domain.profile.ProcessingProfileConfig`.
+        llm_provider: Per-job LLM provider override for the vision critic.
+        llm_model: Per-job LLM model override.
 
     Returns:
         Dict of output file paths on success.
@@ -96,6 +100,8 @@ async def run_pipeline(
                     event_bus=event_bus,
                     db_session=db_session,
                     gpu_device=gpu_device,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
                 )
                 # Root Langfuse trace for the whole job. The trace ID is
                 # deterministic (seeded by the job UUID) so ARQ-level retries
@@ -111,6 +117,8 @@ async def run_pipeline(
                         "session_id": session_id_str,
                         "gpu_device": gpu_device,
                         "profile_config": profile_config_dict,
+                        "llm_provider": llm_provider,
+                        "llm_model": llm_model,
                     },
                 ) as lf_root, lf_attributes(session_id=session_id_str, tags=["batch-pipeline"]):
                     outputs = await orchestrator.run()

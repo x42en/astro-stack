@@ -404,6 +404,14 @@ async def start_processing(
         default=None,
         description="UUID of a saved advanced profile (required for ADVANCED preset).",
     ),
+    llm_provider: Optional[str] = Query(
+        default=None,
+        description="LLM provider override for the vision critic (default, ollama, vllm, kilo, custom).",
+    ),
+    llm_model: Optional[str] = Query(
+        default=None,
+        description="LLM model override for the vision critic (e.g. provider/model id for Kilo).",
+    ),
     db: AsyncSession = Depends(get_async_session),
     _user: Optional[dict] = Depends(get_current_user),
 ) -> dict:
@@ -413,17 +421,27 @@ async def start_processing(
         session_id: Session UUID to process.
         preset: Processing preset (quick/standard/quality/advanced).
         profile_id: Saved profile UUID for ADVANCED preset.
+        llm_provider: Per-job LLM provider override for the vision critic.
+        llm_model: Per-job LLM model override.
         db: Injected database session.
         _user: Injected auth user.
 
     Returns:
         Dict with ``job_id`` of the created pipeline job.
     """
+    from app.llm.factory import validate_override  # noqa: PLC0415
+
+    try:
+        norm_provider, norm_model = validate_override(llm_provider, llm_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     service = JobService(db)
     job = await service.start_pipeline(
         session_id=session_id,
         preset=preset,
         profile_id=profile_id,
+        llm_provider=norm_provider,
+        llm_model=norm_model,
     )
     return {"job_id": str(job.id), "status": job.status}
 
@@ -829,6 +847,14 @@ _LIVE_FRAME_FILENAME_RE = re.compile(
 )
 async def start_live_session(
     session_id: uuid.UUID,
+    llm_provider: Optional[str] = Query(
+        default=None,
+        description="LLM provider override for the live vision critic.",
+    ),
+    llm_model: Optional[str] = Query(
+        default=None,
+        description="LLM model override for the live vision critic.",
+    ),
     db: AsyncSession = Depends(get_async_session),
     user_id: Optional[uuid.UUID] = Depends(get_optional_user_id),
 ) -> dict:
@@ -838,6 +864,7 @@ async def start_live_session(
     running stack and a preview will be regenerated after each frame.
     """
     from app.infrastructure.queue.broker import get_arq_pool  # noqa: PLC0415
+    from app.llm.factory import validate_override  # noqa: PLC0415
     from app.livestack.service import LiveStackService  # noqa: PLC0415
     from app.livestack.state import LiveStackStateRepository  # noqa: PLC0415
 
@@ -872,7 +899,13 @@ async def start_live_session(
         repo = LiveStackStateRepository(pool)
         live_service = LiveStackService(FileStore(), repo)
         # We don't need the event bus to start (no event emitted).
-        state = await live_service.start(session_id)
+        try:
+            norm_provider, norm_model = validate_override(llm_provider, llm_model)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        state = await live_service.start(
+            session_id, llm_provider=norm_provider, llm_model=norm_model
+        )
     finally:
         await pool.aclose()
     return {"session_id": str(session_id), "is_running": state.is_running}

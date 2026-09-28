@@ -89,8 +89,12 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0")
 
     # ── Ollama ────────────────────────────────────────────────────────────────
+    # Local stack serving many switchable models. The native Ollama API lives
+    # at the base URL; the OpenAI-compatible endpoint is ``<base>/v1`` (the
+    # LLM factory appends ``/v1`` automatically when missing).
     ollama_url: str = "http://ollama:11434"
-    ollama_model: str = "llama3.2"
+    ollama_model: str = "qwen3-vl:8b"
+    ollama_timeout_seconds: float = Field(default=120.0, gt=0.0)
 
     # ── vLLM (vision-language model for the Phase 2 adaptive critic) ─────────
     # OpenAI-compatible chat/completions endpoint (vLLM `--served-model-name`).
@@ -104,6 +108,26 @@ class Settings(BaseSettings):
     # shared secret later without an adapter code change.
     vllm_api_key: str = ""
     vllm_timeout_seconds: float = Field(default=120.0, gt=0.0)
+
+    # ── LLM provider selection (multi-provider: ollama | vllm | kilo | custom)
+    # Active provider for every LLM interaction (vision critic today,
+    # recommenders/chat tomorrow). Overridable at runtime via AppSettings
+    # (`llm_active_provider`) and per job/session/profile.
+    llm_active_provider: str = "vllm"
+    # Generic OpenAI-compatible endpoint (escape hatch for `custom`).
+    # Falls back to the vLLM settings when empty.
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: float = Field(default=120.0, gt=0.0)
+
+    # ── Kilo AI Gateway (external, OpenAI-compatible) ────────────────────────
+    # Single endpoint routing to hundreds of models via `provider/model` ids.
+    # Default model is the free vision-capable Qwen 3.8 27B. Secrets stay in
+    # env vars only — never persisted in DB nor exposed via the API.
+    kilo_base_url: str = "https://api.kilo.ai/api/gateway"
+    kilo_model: str = "qwen/qwen3.8-27b:free"
+    kilo_api_key: str = ""
+    kilo_timeout_seconds: float = Field(default=120.0, gt=0.0)
 
     # ── Langfuse observability (optional, external instance) ─────────────────
     # Sends pipeline traces (one trace per job, one span per step attempt, one
