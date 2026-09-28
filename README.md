@@ -35,7 +35,7 @@ repository.
 | Plate solving | ASTAP (headless CLI) |
 | Gradient removal / denoise | GraXpert 3.x (AI + polynomial, CUDA) |
 | AI enhancement | SetiAstroSuitePro (SASpro) — denoise, sharpen, super-resolution, star separation, satellite-trail removal, aberration correction (CUDA) |
-| Adaptive critic (optional) | LangGraph 1.x + any OpenAI-compatible vision-LLM endpoint (e.g. self-hosted vLLM) |
+| Adaptive critic (optional) | LangGraph 1.x + Ollama, vLLM or Kilo Gateway (any OpenAI-compatible vision-LLM endpoint) |
 | RAW handling | rawpy / LibRaw, ExifRead |
 | Real-time events | WebSocket + Redis pub/sub |
 | Container runtime | NVIDIA CUDA 12.8.1 + cuDNN 9 base image |
@@ -134,7 +134,9 @@ flowchart TD
     W0["astro-worker GPU 0\nARQ · pipeline orchestration"]
     W1["astro-worker GPU 1\nARQ · pipeline orchestration"]
     PG[("PostgreSQL\nsessions · jobs · steps · profiles")]
-    VLLM["vLLM (optional, external)\nvision-LLM · adaptive critic"]
+    OLLAMA["Ollama (local)\nvision-LLM · switchable models"]
+    VLLM["vLLM (optional, external)\nvision-LLM · one fast model"]
+    KILO["Kilo Gateway (optional, external)\nvision-LLM · switchable models"]
 
     UI -->|"HTTPS (direct or via Traefik)"| TRAEFIK
     TRAEFIK -->|reverse proxy| API
@@ -149,8 +151,12 @@ flowchart TD
     API <-->|read / write| PG
     W0 <-->|read / write| PG
     W1 <-->|read / write| PG
+    W0 -.->|critique opt-in| OLLAMA
     W0 -.->|critique opt-in| VLLM
+    W0 -.->|critique opt-in| KILO
+    W1 -.->|critique opt-in| OLLAMA
     W1 -.->|critique opt-in| VLLM
+    W1 -.->|critique opt-in| KILO
 ```
 
 ### Pipeline steps
@@ -181,7 +187,14 @@ vision critic (see below) instead of running once with static config.
 AstroStack's core promise is a fully automated pipeline that needs no manual
 tweaking. On top of that, an optional **adaptive vision-critic loop** can
 iteratively refine a handful of steps using any OpenAI-compatible vision-LLM
-endpoint (a self-hosted vLLM server is the verified target):
+endpoint — three providers are supported and fully interchangeable:
+
+* **Ollama** — local stack with switchable vision models (e.g. `qwen3-vl:8b`).
+* **vLLM** — self-hosted server serving one model very fast (e.g. `lagarde-vllm`).
+* **Kilo Gateway** — external endpoint (`https://api.kilo.ai/api/gateway`)
+  routing to hundreds of models via `provider/model` ids. The default
+  `qwen/qwen3.8-27b:free` is free, vision-capable and ideal for testing the
+  critic without loading the local GPU.
 
 1. A step runs once with the profile's static config, producing a preview and
    numeric stats (from Siril, GraXpert or the export pipeline).
@@ -209,8 +222,12 @@ parameters, then freezes the result and reuses it for every subsequent frame
 without calling the critic again — no GPU-bound tools are touched in live
 mode, only the CPU-cheap stretch parameters.
 
-Set `VLLM_BASE_URL` / `VLLM_MODEL` / `VLLM_API_KEY` to point at your
-OpenAI-compatible endpoint (see `.env.example`). A self-hosted SearXNG
+Set `LLM_ACTIVE_PROVIDER` (`ollama` | `vllm` | `kilo`) plus the per-provider
+`OLLAMA_*` / `VLLM_*` / `KILO_*` variables to point at your endpoints (see
+`.env.example`). The active provider can be switched at runtime from the
+Settings page, pinned per processing profile (`adaptive_llm_provider`) or
+overridden per job (`POST /sessions/{id}/process?llm_provider=kilo`). A
+self-hosted SearXNG
 instance (`docker compose --profile searxng up -d`) is bundled in
 anticipation of a planned reference-image search feature (see Roadmap) — not
 consumed by the application yet.
@@ -289,7 +306,9 @@ See `.env.example` for the full list. Key variables:
 | ------------------------- | -------------------------- | ------------------------------------------- |
 | `DATABASE_URL`            | `postgresql+asyncpg://...` | PostgreSQL DSN                              |
 | `REDIS_URL`               | `redis://redis:6379/0`     | Redis DSN                                   |
-| `OLLAMA_URL`              | `http://ollama:11434`      | Optional Ollama API base URL                |
+| `OLLAMA_URL`              | `http://ollama:11434`      | Ollama base URL (OpenAI-compatible at `<base>/v1`) |
+| `OLLAMA_MODEL`            | `qwen3-vl:8b`              | Ollama vision model for the critic |
+| `LLM_ACTIVE_PROVIDER`     | `vllm`                     | Active LLM provider: `ollama`, `vllm`, `kilo` or `custom` |
 | `INBOX_PATH`              | `/inbox`                   | Session inbox directory                     |
 | `MODELS_PATH`             | `/models`                  | AI model weights directory                  |
 | `PIPELINE_MAX_RETRIES`    | `3`                        | Default max retry count per step            |
@@ -302,6 +321,9 @@ See `.env.example` for the full list. Key variables:
 | `VLLM_BASE_URL`           | `http://vllm:8000/v1`      | OpenAI-compatible endpoint for the adaptive critic |
 | `VLLM_MODEL`              | `lagarde-vllm`              | Model name requested from the vLLM server   |
 | `VLLM_API_KEY`            | *(empty)*                  | Bearer token, if your endpoint requires one |
+| `KILO_BASE_URL`           | `https://api.kilo.ai/api/gateway` | Kilo Gateway endpoint (external)       |
+| `KILO_MODEL`              | `qwen/qwen3.8-27b:free`     | Kilo model id (`provider/model`, free vision default) |
+| `KILO_API_KEY`            | *(empty)*                  | Kilo Gateway API key (env only, never exposed) |
 
 ---
 

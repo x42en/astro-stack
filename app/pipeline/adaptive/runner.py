@@ -35,6 +35,8 @@ async def run_adaptive_loop(
     on_iteration: Optional[OnIterationFn] = None,
     human_reviewer: Optional[HumanReviewerFn] = None,
     critic: Optional[VisionCritic] = None,
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
 ) -> AdaptiveLoopResult:
     """Run the adaptive vision-critic loop for a single pipeline step.
 
@@ -68,6 +70,9 @@ async def run_adaptive_loop(
             proposed patch.
         critic: Vision critic client; a default instance built from
             application settings is used when omitted.
+        llm_provider: Provider override used when building the default critic
+            (``None`` = configured active provider).
+        llm_model: Model override used when building the default critic.
 
     Returns:
         :class:`~app.pipeline.adaptive.types.AdaptiveLoopResult` summarising
@@ -80,7 +85,7 @@ async def run_adaptive_loop(
         raise ValueError("max_iterations must be >= 1")
 
     own_critic = critic is None
-    active_critic = critic or VisionCritic()
+    active_critic = critic or VisionCritic(provider=llm_provider, model=llm_model)
     try:
         graph = build_adaptive_graph(
             critic=active_critic,

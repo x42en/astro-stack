@@ -210,12 +210,13 @@ async def evaluate(
 
     A critic that is unreachable or returns a malformed response never
     raises: it degrades to "satisfied" with the current parameters
-    unchanged, so a broken vLLM endpoint can never break live-stacking
-    (which must keep working for novices with the feature off or
-    misconfigured).
+    unchanged, so a broken endpoint can never break live-stacking (which
+    must keep working for novices with the feature off or misconfigured).
 
     Args:
-        critic: Vision critic client (see :class:`VisionCritic`).
+        critic: Vision critic client (see :class:`VisionCritic`). Callers
+            should build it with the session's ``adaptive_llm_*`` overrides
+            so a per-session provider switch is honoured.
         preview_jpeg_path: Path to the just-rendered preview JPEG.
         stats: Linear-accumulator histogram statistics for this frame.
         state: Current live-stack state (read-only here; the caller persists

@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.domain.app_settings import AppSettings, AppSettingsUpdate
+from app.domain.app_settings import AppSettings, AppSettingsUpdate, LlmProfileInfo, LlmSettingsRead
+from app.llm.factory import resolve_llm_profile
 
 
 async def get_app_settings(db: AsyncSession) -> AppSettings:
@@ -83,8 +84,47 @@ def _make_default_row() -> AppSettings:
         inbox_path=s.inbox_path,
         ollama_url=s.ollama_url,
         ollama_model=s.ollama_model,
+        llm_active_provider=s.llm_active_provider,
+        llm_ollama_url="",
+        llm_ollama_model="",
+        llm_vllm_base_url="",
+        llm_vllm_model="",
+        llm_kilo_model="",
         pipeline_max_retries=s.pipeline_max_retries,
         session_stability_delay=float(s.session_stability_delay),
         updated_at=datetime.now(timezone.utc),
         updated_by_user_id=None,
     )
+
+
+_LLM_DISPLAY_NAMES = {"ollama": "Ollama", "vllm": "vLLM", "kilo": "Kilo"}
+
+
+def get_llm_settings(row: AppSettings) -> LlmSettingsRead:
+    """Build the public LLM provider overview from the settings row.
+
+    Secrets are never exposed — only a ``has_api_key`` flag per provider.
+
+    Args:
+        row: The ``AppSettings`` singleton row.
+
+    Returns:
+        The :class:`LlmSettingsRead` overview.
+    """
+    from app.llm.factory import normalize_provider  # noqa: PLC0415
+
+    active = normalize_provider(row.llm_active_provider)
+    profiles: list[LlmProfileInfo] = []
+    for name in ("ollama", "vllm", "kilo"):
+        profile = resolve_llm_profile(name, app_settings=row)
+        profiles.append(
+            LlmProfileInfo(
+                provider=name,
+                display_name=_LLM_DISPLAY_NAMES[name],
+                base_url=profile.base_url,
+                model=profile.model,
+                has_api_key=profile.has_api_key,
+                is_active=(name == active),
+            )
+        )
+    return LlmSettingsRead(active_provider=active, profiles=profiles)

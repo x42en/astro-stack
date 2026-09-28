@@ -141,6 +141,9 @@ class PipelineOrchestrator:
         db_session: Active async SQLAlchemy session.
         retry_policy: Retry configuration for this run.
         gpu_device: CUDA device assigned to this worker.
+        llm_provider: Optional per-job LLM provider override for the critic loop
+            (``None`` = profile, then active provider).
+        llm_model: Optional per-job LLM model override.
     """
 
     def __init__(
@@ -152,6 +155,8 @@ class PipelineOrchestrator:
         db_session: AsyncSession,
         retry_policy: RetryPolicy | None = None,
         gpu_device: str = "cuda:0",
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
     ) -> None:
         """Initialise the orchestrator.
 
@@ -163,6 +168,8 @@ class PipelineOrchestrator:
             db_session: Database session for step persistence.
             retry_policy: Optional retry configuration; uses defaults if not provided.
             gpu_device: CUDA device string assigned to this worker process.
+            llm_provider: Per-job LLM provider override (``None`` = profile).
+            llm_model: Per-job LLM model override.
         """
         self.job_id = job_id
         self.session_id = session_id
@@ -171,6 +178,8 @@ class PipelineOrchestrator:
         self.db_session = db_session
         self.retry_policy = retry_policy or RetryPolicy(max_attempts=profile_config.max_retries)
         self.gpu_device = gpu_device
+        self.llm_provider = llm_provider
+        self.llm_model = llm_model
 
         self._job_repo = JobRepository(db_session)
         self._step_repo = JobStepRepository(db_session)
@@ -307,6 +316,7 @@ class PipelineOrchestrator:
 
         initial_stats = await _get_stats(fits_path)
 
+        llm_provider, llm_model = self._resolve_llm_override()
         with lf_observation(
             "adaptive-loop",
             input={
@@ -314,6 +324,8 @@ class PipelineOrchestrator:
                 "allowed_fields": list(allowed_fields),
                 "max_iterations": self.profile_config.adaptive_critic_max_iterations,
                 "initial_stats": initial_stats,
+                "llm_provider": llm_provider,
+                "llm_model": llm_model,
             },
         ) as lf_loop:
             result = await run_adaptive_loop(
@@ -326,11 +338,29 @@ class PipelineOrchestrator:
                 require_human_approval=self.profile_config.adaptive_critic_require_human_approval,
                 run_step=_run_step,
                 on_iteration=_on_iteration,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
             )
             lf_update(lf_loop, output=result.to_metadata())
 
         config_dict.update(result.final_config_patch)
         return result.to_metadata()
+
+    def _resolve_llm_override(self) -> tuple[str | None, str | None]:
+        """Resolve the effective per-job LLM override for the critic loop.
+
+        Precedence: per-job override (``POST /process`` query params), then
+        per-profile fields (``adaptive_llm_provider`` / ``adaptive_llm_model``),
+        then the configured active provider (``None`` = active provider).
+
+        Returns:
+            ``(provider, model)`` where ``None`` means "use active default".
+        """
+        profile_provider = getattr(self.profile_config, "adaptive_llm_provider", "default")
+        profile_model = getattr(self.profile_config, "adaptive_llm_model", None)
+        provider = self.llm_provider or (profile_provider if profile_provider != "default" else None)
+        model = self.llm_model or profile_model
+        return provider, model
 
     async def run(self) -> dict[str, Any]:
         """Execute all pipeline steps in sequence, with retry and resume support.
